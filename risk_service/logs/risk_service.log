@@ -1,0 +1,2 @@
+{"timestamp": "2025-12-16T08:32:35.856252Z", "level": "INFO", "service": "risk_service", "message": "Risk assessment started", "trace_id": "7671b76c-8cb0-4a35-899d-cc0d2a295aac", "order_id": "aa3990d1-cc10-416a-9524-a8fc8730bfa1"}
+{"timestamp": "2025-12-16T08:32:35.857262Z", "level": "INFO", "service": "risk_service", "message": "Risk assessment completed", "trace_id": "7671b76c-8cb0-4a35-899d-cc0d2a295aac", "order_id": "aa3990d1-cc10-416a-9524-a8fc8730bfa1"}
