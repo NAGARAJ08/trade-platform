@@ -1,175 +1,148 @@
-# Trade Platform - Simple Demo
+# Trade Platform - FastAPI Microservices Demo
 
-A simple trading platform with 4 microservices that demonstrates order processing scenarios.
+A simple trading platform with 4 microservices demonstrating order processing with detailed JSON logging.
 
-## 🏗️ Services
+## Services
 
-1. **Orchestrator** (Port 8000) - Main entry point, coordinates all services
-2. **Trade Service** (Port 8001) - Validates and executes trades
-3. **Pricing & PnL Service** (Port 8002) - Calculates prices and profit/loss
-4. **Risk Service** (Port 8003) - Assesses trading risk
+- **Orchestrator** (8000) - Coordinates order flow
+- **Trade Service** (8001) - Validates trades
+- **Pricing & PnL** (8002) - Price calculations
+- **Risk Service** (8003) - Risk assessment
 
-## 🚀 How to Run
-
-### Step 1: Install Dependencies
+## Quick Start
 
 ```powershell
-# In each service folder, install requirements
-cd orchestrator
-pip install -r requirements.txt
+# Start all services
+.\start-all-services.ps1
 
-cd ..\trade_service
-pip install -r requirements.txt
-
-cd ..\pricing_pnl_service
-pip install -r requirements.txt
-
-cd ..\risk_service
-pip install -r requirements.txt
+# Or manually in separate terminals
+uvicorn orchestrator.src.app:app --host 0.0.0.0 --port 8000
+uvicorn trade_service.src.app:app --host 0.0.0.0 --port 8001
+uvicorn pricing_pnl_service.src.app:app --host 0.0.0.0 --port 8002
+uvicorn risk_service.src.app:app --host 0.0.0.0 --port 8003
 ```
 
-### Step 2: Start Services (Open 4 terminals)
+**Swagger UI:** http://localhost:8000/docs
 
-**Terminal 1 - Trade Service:**
-```powershell
-cd trade_service\src
-python app.py
+## API Examples
+
+### 1. ✅ Success Scenario
+
+```bash
+curl -X POST "http://localhost:8000/orders" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "symbol": "AAPL",
+    "quantity": 100,
+    "order_type": "BUY",
+    "scenario": "success"
+  }'
 ```
 
-**Terminal 2 - Pricing & PnL Service:**
-```powershell
-cd pricing_pnl_service\src
-python app.py
+**Response:**
+```json
+{
+  "order_id": "abc-123",
+  "status": "EXECUTED",
+  "message": "Order executed successfully",
+  "trace_id": "xyz-789",
+  "details": {
+    "execution": { "status": "EXECUTED", "price": 175.50 },
+    "pricing": { "total_cost": 17550.0, "estimated_pnl": -1050.0 },
+    "risk": { "risk_level": "LOW", "approved": true }
+  }
+}
 ```
-
-**Terminal 3 - Risk Service:**
-```powershell
-cd risk_service\src
-python app.py
-```
-
-**Terminal 4 - Orchestrator:**
-```powershell
-cd orchestrator\src
-python app.py
-```
-
-### Step 3: Access Swagger UI
-
-Open your browser: **http://localhost:8000/docs**
-
-## 📊 Test Scenarios
-
-All scenarios use the same endpoint: `POST /orders` with query parameters
-
-### 1. ✅ Successful Order
-
-```powershell
-Invoke-RestMethod -Uri "http://localhost:8000/orders?success=true" -Method POST -Body '{"symbol":"AAPL","quantity":50,"order_type":"BUY"}' -ContentType "application/json"
-```
-
-**Or in Swagger:** Try `/orders` with `success=true`
 
 ### 2. ⏰ Market Closed
 
-```powershell
-Invoke-RestMethod -Uri "http://localhost:8000/orders?market_closed=true" -Method POST -Body '{"symbol":"AAPL","quantity":50,"order_type":"BUY"}' -ContentType "application/json"
+```bash
+curl -X POST "http://localhost:8000/orders" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "symbol": "GOOGL",
+    "quantity": 50,
+    "order_type": "BUY",
+    "scenario": "market_closed"
+  }'
 ```
 
-**Or in Swagger:** Try `/orders` with `market_closed=true`
-
-### 3. 🔴 Service Error
-
-```powershell
-Invoke-RestMethod -Uri "http://localhost:8000/orders?service_error=true" -Method POST -Body '{"symbol":"AAPL","quantity":100,"order_type":"BUY"}' -ContentType "application/json"
+**Response:**
+```json
+{
+  "order_id": "def-456",
+  "status": "REJECTED",
+  "message": "Market is currently closed. Trading hours: 9:00 AM - 4:00 PM",
+  "trace_id": "xyz-790"
+}
 ```
 
-**Or in Swagger:** Try `/orders` with `service_error=true`
+### 3. 🔴 Service Error (External API Failure)
 
-### 4. 🧮 Calculation Error
-
-```powershell
-Invoke-RestMethod -Uri "http://localhost:8000/orders?calculation_error=true" -Method POST -Body '{"symbol":"INVALID","quantity":75,"order_type":"BUY"}' -ContentType "application/json"
+```bash
+curl -X POST "http://localhost:8000/orders" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "symbol": "MSFT",
+    "quantity": 200,
+    "order_type": "SELL",
+    "scenario": "service_error"
+  }'
 ```
 
-**Or in Swagger:** Try `/orders` with `calculation_error=true`
-
-## 📝 Query Parameters
-
-Use these on the `/orders` endpoint:
-
-- `?success=true` - Normal successful order (default)
-- `?market_closed=true` - Simulates market closed
-- `?service_error=true` - Simulates service failure
-- `?calculation_error=true` - Simulates pricing error
-
-**Example:** `/orders?market_closed=true&symbol=AAPL`
-
-## 🔍 Viewing Logs
-
-Logs are generated in each service's `logs/` folder:
-
-```
-orchestrator/logs/orchestrator.log
-trade_service/logs/trade_service.log
-pricing_pnl_service/logs/pricing_pnl_service.log
-risk_service/logs/risk_service.log
+**Response:**
+```json
+{
+  "detail": "Market data service unavailable. Unable to fetch current price for MSFT from NASDAQ Market Data API. The external data provider is experiencing connectivity issues. Please retry in a few moments."
+}
 ```
 
-Each log entry includes a `trace_id` to track requests across services.
+### 4. 🧮 Calculation Error (Mismatch Detected)
 
-## 📋 What Each Service Does
+```bash
+curl -X POST "http://localhost:8000/orders" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "symbol": "NVDA",
+    "quantity": 100,
+    "order_type": "BUY",
+    "scenario": "calculation_error"
+  }'
+```
 
-### Orchestrator (Port 8000)
-- Receives order from client
-- Calls other services in sequence:
-  1. Trade Service → validate
-  2. Pricing Service → get price
-  3. Risk Service → assess risk
-  4. Trade Service → execute
-- Returns final result
+**Response:**
+```json
+{
+  "detail": "Pricing calculation error detected: Expected $49560.00 but calculated $48588.80. Discrepancy of $971.20 exceeds acceptable tolerance. Please retry or contact support."
+}
+```
 
-### Trade Service (Port 8001)
-- Validates: market hours, symbol, quantity
-- Executes trade if approved
-- Stores trade records
+## Scenarios
 
-### Pricing & PnL Service (Port 8002)
-- Gets current market price
-- Calculates estimated profit/loss
-- Supports symbols: AAPL, GOOGL, MSFT, AMZN, TSLA, META, NVDA
+| Scenario | Description | Demonstrates |
+|----------|-------------|--------------|
+| `success` | Normal order execution | Happy path flow |
+| `market_closed` | Trading outside hours | Business rule validation |
+| `service_error` | External API unavailable | External dependency failure |
+| `calculation_error` | Price calculation mismatch | Data integrity checks |
 
-### Risk Service (Port 8003)
-- Calculates risk score (0-100)
-- Considers: position size, PnL, quantity, volatility
-- Approves LOW/MEDIUM risk, rejects HIGH risk
+**Note:** Omit `scenario` field for default success behavior.
 
-## 🎯 Quick Demo in Swagger
+## Logging
 
-1. Open http://localhost:8000/docs
-2. Click on `POST /orders`
-3. Click "Try it out"
-4. Keep the default body
-5. Change query parameters:
-   - Set `market_closed` to `true`
-   - Click "Execute"
-6. See the rejection response
-7. Try with different combinations!
+All services generate JSON logs in `logs/` directories with Splunk-style formatting:
+- `orchestrator/logs/orchestrator.log`
+- `trade_service/logs/trade_service.log`
+- `pricing_pnl_service/logs/pricing_pnl_service.log`
+- `risk_service/logs/risk_service.log`
 
-## 🛠️ Technology
+Each log entry includes `trace_id` for distributed tracing across services.
 
-- **Python 3.11+**
-- **FastAPI** - Modern web framework
-- **Uvicorn** - ASGI server
-- **No Docker** - Just simple Python apps
+## Tech Stack
 
-## 📱 All Services Have Swagger
-
-- Orchestrator: http://localhost:8000/docs
-- Trade: http://localhost:8001/docs
-- Pricing: http://localhost:8002/docs
-- Risk: http://localhost:8003/docs
+- Python 3.9+
+- FastAPI 0.109.0
+- Uvicorn 0.27.0
+- Pydantic 2.5.3
 
 ---
-
-**That's it! Simple and straightforward. 🚀**
