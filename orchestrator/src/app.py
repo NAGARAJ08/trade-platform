@@ -60,17 +60,11 @@ class OrderType(str, Enum):
     SELL = "SELL"
 
 
-class ScenarioType(str, Enum):
-    SUCCESS = "success"
-    MARKET_CLOSED = "market_closed"
-    SERVICE_ERROR = "service_error"
-    CALCULATION_ERROR = "calculation_error"
-
-
 class OrderRequest(BaseModel):
     symbol: str = Field(..., example="AAPL")
     quantity: int = Field(..., gt=0, example=100)
     order_type: OrderType = Field(..., example="BUY")
+    scenario: Optional[str] = Field(None, example="success", description="Test scenario: success, market_closed, service_error, calculation_error")
 
 
 class OrderResponse(BaseModel):
@@ -135,38 +129,29 @@ def health_check():
 
 
 @app.post("/orders", response_model=OrderResponse)
-async def place_order(
-    order: OrderRequest, 
-    request: Request,
-    success: bool = True,
-    market_closed: bool = False,
-    service_error: bool = False,
-    calculation_error: bool = False
-):
+async def place_order(order: OrderRequest, request: Request):
     """
     Place a new order - orchestrates the entire trade flow
     
-    Query Parameters:
-    - success: Set to True for successful execution (default: True)
-    - market_closed: Set to True to simulate market closed scenario (default: False)
-    - service_error: Set to True to simulate service error (default: False)
-    - calculation_error: Set to True to simulate calculation error (default: False)
+    Scenarios (optional in payload):
+    - "success" - Successful execution (default)
+    - "market_closed" - Market closed scenario
+    - "service_error" - Service error scenario
+    - "calculation_error" - Calculation error scenario
     
-    Example: POST /orders?market_closed=true
+    Example payload:
+    {
+        "symbol": "AAPL",
+        "quantity": 50,
+        "order_type": "BUY",
+        "scenario": "market_closed"
+    }
     """
     trace_id = get_trace_id(request.headers.get("X-Trace-Id"))
     order_id = str(uuid.uuid4())
     
-    # Determine scenario based on query params
-    scenario = None
-    if market_closed:
-        scenario = "market_closed"
-    elif service_error:
-        scenario = "service_error"
-    elif calculation_error:
-        scenario = "calculation_error"
-    elif success:
-        scenario = "success"
+    # Use scenario from payload or default to success
+    scenario = order.scenario if order.scenario else "success"
     
     logger.info(f"Order placement started - symbol: {order.symbol}, quantity: {order.quantity}, type: {order.order_type}", 
                 extra={'trace_id': trace_id, 'order_id': order_id, 'extra_data': {'symbol': order.symbol, 'quantity': order.quantity}})
