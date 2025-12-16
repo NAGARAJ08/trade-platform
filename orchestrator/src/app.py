@@ -109,8 +109,14 @@ async def call_service(url: str, method: str, trace_id: str, json_data: dict = N
         logger.error(f"Timeout calling {url}", extra={'trace_id': trace_id})
         raise HTTPException(status_code=504, detail=f"Service timeout: {url}")
     except httpx.HTTPStatusError as e:
-        logger.error(f"HTTP error calling {url} - status {e.response.status_code}", extra={'trace_id': trace_id})
-        raise HTTPException(status_code=e.response.status_code, detail=f"Service error: {url}")
+        # Extract detailed error message from service response
+        try:
+            error_detail = e.response.json().get('detail', f"Service error: {url}")
+        except:
+            error_detail = f"Service error: {url}"
+        logger.error(f"HTTP error calling {url} - status {e.response.status_code}: {error_detail}", 
+                    extra={'trace_id': trace_id, 'extra_data': {'status_code': e.response.status_code, 'error_detail': error_detail}})
+        raise HTTPException(status_code=e.response.status_code, detail=error_detail)
     except Exception as e:
         logger.error(f"Error calling {url} - {str(e)}", extra={'trace_id': trace_id})
         raise HTTPException(status_code=500, detail=f"Service call failed: {url}")

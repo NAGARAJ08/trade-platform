@@ -195,30 +195,41 @@ async def calculate_pricing(request_data: PricingRequest, request: Request):
         logger.info(f"Calculating total order value: {request_data.quantity} x ${current_price} = ${order_value}", 
                    extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'extra_data': {'order_value': order_value}})
         
-        # Realistic calculation_error: Check order value limits
-        MAX_ORDER_VALUE = 500000  # $500,000 limit
+        # Realistic calculation_error: Simulate calculation discrepancy/mismatch
         if request_data.scenario == "calculation_error":
-            logger.warning(f"Order value validation triggered: ${order_value:.2f} (Limit: ${MAX_ORDER_VALUE})", 
-                         extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'extra_data': {'order_value': order_value, 'max_limit': MAX_ORDER_VALUE}})
-            if order_value > MAX_ORDER_VALUE:
-                logger.error(f"CALCULATION ERROR - Order value ${order_value:.2f} exceeds maximum allowed limit of ${MAX_ORDER_VALUE}", extra={
-                    "trace_id": trace_id,
-                    "order_id": request_data.order_id,
-                    "scenario": "calculation_error",
-                    'extra_data': {'order_value': order_value, 'max_limit': MAX_ORDER_VALUE, 'excess_amount': order_value - MAX_ORDER_VALUE}
-                })
-                raise HTTPException(status_code=400, detail=f"Order value ${order_value:.2f} exceeds maximum allowed limit of ${MAX_ORDER_VALUE}. Please reduce quantity or split into multiple orders.")
-            else:
-                # Force error even if value is below limit for demo purposes
-                logger.error(f"CALCULATION ERROR - Simulated business rule violation: Order value ${order_value:.2f} flagged for review (Scenario: calculation_error)", extra={
-                    "trace_id": trace_id,
-                    "order_id": request_data.order_id,
-                    "scenario": "calculation_error",
-                    'extra_data': {'order_value': order_value, 'reason': 'simulated_limit_check_failure'}
-                })
-                raise HTTPException(status_code=400, detail=f"Order value ${order_value:.2f} exceeds maximum allowed limit of ${MAX_ORDER_VALUE}. Please reduce quantity.")
+            # Simulate a calculation error where computed values don't match
+            expected_total = current_price * request_data.quantity
+            # Introduce artificial error in calculation (e.g., rounding error, formula bug)
+            calculated_total = expected_total * 0.98  # Simulates 2% calculation error
+            
+            logger.warning(f"CALCULATION MISMATCH DETECTED - Verification check failed", extra={
+                'trace_id': trace_id,
+                'order_id': request_data.order_id,
+                'extra_data': {
+                    'price': current_price,
+                    'quantity': request_data.quantity,
+                    'expected_total': expected_total,
+                    'calculated_total': calculated_total,
+                    'discrepancy': expected_total - calculated_total
+                }
+            })
+            logger.error(f"CALCULATION ERROR - Expected total: ${expected_total:.2f} but system calculated: ${calculated_total:.2f} (Discrepancy: ${expected_total - calculated_total:.2f})", extra={
+                "trace_id": trace_id,
+                "order_id": request_data.order_id,
+                "scenario": "calculation_error",
+                'extra_data': {
+                    'expected': expected_total,
+                    'actual': calculated_total,
+                    'error_percentage': ((expected_total - calculated_total) / expected_total) * 100,
+                    'reason': 'calculation_mismatch'
+                }
+            })
+            raise HTTPException(
+                status_code=500, 
+                detail=f"Pricing calculation error detected: Expected ${expected_total:.2f} but calculated ${calculated_total:.2f}. Discrepancy of ${expected_total - calculated_total:.2f} exceeds acceptable tolerance. Please retry or contact support."
+            )
         
-        logger.info(f"Order value ${order_value:.2f} is within acceptable limits", 
+        logger.info(f"Order value ${order_value:.2f} calculated successfully", 
                    extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'extra_data': {'order_value': order_value}})
         
         # Calculate PnL
@@ -275,6 +286,9 @@ async def calculate_pricing(request_data: PricingRequest, request: Request):
             timestamp=timestamp
         )
         
+    except HTTPException:
+        # Re-raise HTTPException without logging as unexpected error
+        raise
     except Exception as e:
         logger.error("Unexpected error in pricing calculation", extra={
             "trace_id": trace_id,

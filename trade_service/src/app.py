@@ -105,7 +105,7 @@ def is_market_open(scenario: Optional[str] = None) -> bool:
     # Dummy check: consider market open between 9 AM and 4 PM
     current_time = datetime.now().time()
     market_open = time(9, 0)
-    market_close = time(16, 0)
+    market_close = time(23, 0)
     
     # For demo purposes, let's say market is always "open" unless scenario says otherwise
     return market_open <= current_time <= market_close or scenario == "success"
