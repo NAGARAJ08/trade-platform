@@ -24,9 +24,7 @@ uvicorn risk_service.src.app:app --host 0.0.0.0 --port 8003
 
 **Swagger UI:** http://localhost:8000/docs
 
-## API Examples
-
-### 1. ✅ Success Scenario
+### 1. ✅ Success (Normal Order)
 
 ```bash
 curl -X POST "http://localhost:8000/orders" \
@@ -34,8 +32,7 @@ curl -X POST "http://localhost:8000/orders" \
   -d '{
     "symbol": "AAPL",
     "quantity": 100,
-    "order_type": "BUY",
-    "scenario": "success"
+    "order_type": "BUY"
   }'
 ```
 
@@ -54,7 +51,91 @@ curl -X POST "http://localhost:8000/orders" \
 }
 ```
 
-### 2. ⏰ Market Closed
+---
+
+### 2. 🐛 Validation Bug (Negative Quantity)
+
+```bash
+curl -X POST "http://localhost:8000/orders" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "symbol": "AAPL",
+    "quantity": -50,
+    "order_type": "BUY"
+  }'
+```
+
+**Bug:** Validation missing negative check - allows negative quantities  
+**Error Location:** `validate_quantity()` in trade_service  
+**Logs Show:** "ANOMALY DETECTED - Negative quantity received"
+
+---
+
+### 3. 🧮 Calculation Error (Bulk Order Bug)
+
+```bash
+curl -X POST "http://localhost:8000/orders" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "symbol": "NVDA",
+    "quantity": 600,
+    "order_type": "BUY"
+  }'
+```
+
+**Bug:** Wrong discount multiplier (0.98) for orders > 500  
+**Response:**
+```json
+{
+  "detail": "Pricing calculation error: Expected $297360.00 but calculated $291412.80. Discrepancy of $5947.20 in bulk order pricing. System bug detected."
+}
+```
+**Error Location:** Bulk pricing logic in pricing_service
+
+---
+
+### 4. 💥 Division By Zero (Unknown Symbol)
+
+```bash
+curl -X POST "http://localhost:8000/orders" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "symbol": "XYZ",
+    "quantity": 100,
+    "order_type": "SELL"
+  }'
+```
+
+**Bug:** `get_cost_basis()` returns 0 for unknown symbols → division by zero  
+**Error Location:** `calculate_pnl()` in pricing_service line ~145  
+**Stack Trace:** "ZeroDivisionError: division by zero"
+
+---
+
+### 5. 🔴 Null Pointer Exception (Large Order)
+
+```bash
+curl -X POST "http://localhost:8000/orders" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "symbol": "TSLA",
+    "quantity": 1500,
+    "order_type": "BUY"
+  }'
+```
+
+**Bug:** Missing null check when fetching historical data for quantity > 1000  
+**Response:**
+```json
+{
+  "detail": "Risk assessment failed: NullPointerException at line 156 while calculating volatility for TSLA with quantity 1500. Historical market data unavailable for large orders."
+}
+```
+**Error Location:** `calculate_risk_score()` line 156 in risk_service
+
+---
+
+### 6. ⏰ Market Closed (Time-Based)
 
 ```bash
 curl -X POST "http://localhost:8000/orders" \
@@ -62,71 +143,26 @@ curl -X POST "http://localhost:8000/orders" \
   -d '{
     "symbol": "GOOGL",
     "quantity": 50,
-    "order_type": "BUY",
-    "scenario": "market_closed"
+    "order_type": "BUY"
   }'
 ```
 
-**Response:**
-```json
-{
-  "order_id": "def-456",
-  "status": "REJECTED",
-  "message": "Market is currently closed. Trading hours: 9:00 AM - 4:00 PM",
-  "trace_id": "xyz-790"
-}
-```
+**Triggers:** Only outside 9:30 AM - 4:00 PM  
+**Response:** "Market is currently closed. Trading hours: 9:30 AM - 4:00 PM"
 
-### 3. 🔴 Service Error (External API Failure)
+---
 
-```bash
-curl -X POST "http://localhost:8000/orders" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "symbol": "MSFT",
-    "quantity": 200,
-    "order_type": "SELL",
-    "scenario": "service_error"
-  }'
-```
+## Bug Summary
 
-**Response:**
-```json
-{
-  "detail": "Market data service unavailable. Unable to fetch current price for MSFT from NASDAQ Market Data API. The external data provider is experiencing connectivity issues. Please retry in a few moments."
-}
-```
+| Input Condition | Bug Triggered | Service | Root Cause |
+|----------------|---------------|---------|------------|
+| `quantity < 0` | Validation bypass | Trade | Missing negative check |
+| `quantity > 500` | Calculation error | Pricing | Wrong bulk discount multiplier |
+| Unknown `symbol` | Division by zero | Pricing | Returns 0 cost basis |
+| `quantity > 1000` | Null pointer | Risk | Missing null check for volatility data |
+| Outside 9:30-4pm | Market closed | Trade | Time-based validation |
 
-### 4. 🧮 Calculation Error (Mismatch Detected)
-
-```bash
-curl -X POST "http://localhost:8000/orders" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "symbol": "NVDA",
-    "quantity": 100,
-    "order_type": "BUY",
-    "scenario": "calculation_error"
-  }'
-```
-
-**Response:**
-```json
-{
-  "detail": "Pricing calculation error detected: Expected $49560.00 but calculated $48588.80. Discrepancy of $971.20 exceeds acceptable tolerance. Please retry or contact support."
-}
-```
-
-## Scenarios
-
-| Scenario | Description | Demonstrates |
-|----------|-------------|--------------|
-| `success` | Normal order execution | Happy path flow |
-| `market_closed` | Trading outside hours | Business rule validation |
-| `service_error` | External API unavailable | External dependency failure |
-| `calculation_error` | Price calculation mismatch | Data integrity checks |
-
-**Note:** Omit `scenario` field for default success behavior.
+**All bugs are reproducible with the same input data.**
 
 ## Logging
 

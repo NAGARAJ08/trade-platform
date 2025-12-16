@@ -11,6 +11,7 @@ env/
 ENV/
 .venv/
 .env/
+logs/
 
 # Log files
 *.log

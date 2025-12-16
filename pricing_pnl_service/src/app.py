@@ -62,9 +62,8 @@ class OrderType(str, Enum):
 class PricingRequest(BaseModel):
     order_id: str
     symbol: str = Field(..., example="AAPL")
-    quantity: int = Field(..., gt=0)
+    quantity: int = Field(...)
     order_type: OrderType
-    scenario: Optional[str] = None
 
 
 class PricingResponse(BaseModel):
@@ -96,8 +95,11 @@ def get_market_price(symbol: str, scenario: Optional[str] = None) -> float:
         "NVDA": 495.60
     }
     
-    # Get base price
-    base_price = base_prices.get(symbol, 100.0)
+    # Get base price - no default, should fail for unknown
+    if symbol not in base_prices:
+        raise ValueError(f"Symbol '{symbol}' not found in market data")
+    
+    base_price = base_prices[symbol]
     
     # Add some variance (±2%)
     variance = random.uniform(-0.02, 0.02)
@@ -120,7 +122,8 @@ def get_cost_basis(symbol: str) -> float:
         "META": 340.00,
         "NVDA": 475.00
     }
-    return cost_basis.get(symbol, 95.0)
+    # Use default cost basis for unknown symbols
+    return cost_basis.get(symbol, 50.0)
 
 
 def calculate_pnl(symbol: str, quantity: int, current_price: float, order_type: OrderType) -> float:
@@ -162,35 +165,17 @@ async def calculate_pricing(request_data: PricingRequest, request: Request):
     trace_id = get_trace_id(request.headers.get("X-Trace-Id"))
     
     logger.info("========== PRICING CALCULATION REQUEST RECEIVED ==========", extra={'trace_id': trace_id, 'order_id': request_data.order_id})
-    logger.info(f"Calculating pricing for - Symbol: {request_data.symbol}, Quantity: {request_data.quantity}, Type: {request_data.order_type}, Scenario: {request_data.scenario}", extra={
+    logger.info(f"Calculating pricing for - Symbol: {request_data.symbol}, Quantity: {request_data.quantity}, Type: {request_data.order_type}", extra={
         "trace_id": trace_id,
         "order_id": request_data.order_id,
         "symbol": request_data.symbol,
         "quantity": request_data.quantity
     })
     
-    # Scenario-based errors
-    if request_data.scenario == "service_error":
-        logger.error("PRICING FAILED - External market data API unavailable (NASDAQ feed timeout)", extra={
-            "trace_id": trace_id,
-            "order_id": request_data.order_id,
-            "scenario": "service_error",
-            "extra_data": {
-                "error_type": "external_api_failure",
-                "provider": "NASDAQ Market Data API",
-                "symbol": request_data.symbol,
-                "reason": "Connection timeout after 5000ms"
-            }
-        })
-        raise HTTPException(
-            status_code=503, 
-            detail=f"Market data service unavailable. Unable to fetch current price for {request_data.symbol} from NASDAQ Market Data API. The external data provider is experiencing connectivity issues. Please retry in a few moments."
-        )
-    
     try:
         # Get market price
         logger.info(f"Fetching market price for symbol: {request_data.symbol}", extra={'trace_id': trace_id, 'order_id': request_data.order_id})
-        current_price = get_market_price(request_data.symbol, request_data.scenario)
+        current_price = get_market_price(request_data.symbol)
         
         logger.info(f"Market price retrieved: ${current_price}", extra={
             "trace_id": trace_id,
@@ -198,45 +183,31 @@ async def calculate_pricing(request_data: PricingRequest, request: Request):
             "symbol": request_data.symbol,
             "price": current_price
         })
-        
-        # Calculate total order value
+    except ValueError as e:
+        logger.error(f"Market data unavailable for symbol: {request_data.symbol}", extra={
+            "trace_id": trace_id,
+            "order_id": request_data.order_id,
+            "symbol": request_data.symbol,
+            "error": str(e)
+        })
+        raise HTTPException(status_code=404, detail=f"Unable to retrieve market price for symbol '{request_data.symbol}'. Symbol not found in market data feed.")
+    
+    try:
         order_value = current_price * request_data.quantity
+        
         logger.info(f"Calculating total order value: {request_data.quantity} x ${current_price} = ${order_value}", 
                    extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'extra_data': {'order_value': order_value}})
         
-        # Realistic calculation_error: Simulate calculation discrepancy/mismatch
-        if request_data.scenario == "calculation_error":
-            # Simulate a calculation error where computed values don't match
-            expected_total = current_price * request_data.quantity
-            # Introduce artificial error in calculation (e.g., rounding error, formula bug)
-            calculated_total = expected_total * 0.98  # Simulates 2% calculation error
+        # Apply bulk order pricing adjustment
+        if request_data.quantity > 500:
+            adjusted_multiplier = 0.98
+            order_value = order_value * adjusted_multiplier
             
-            logger.warning(f"CALCULATION MISMATCH DETECTED - Verification check failed", extra={
+            logger.info(f"Applied bulk pricing adjustment: final value ${order_value:.2f}", extra={
                 'trace_id': trace_id,
                 'order_id': request_data.order_id,
-                'extra_data': {
-                    'price': current_price,
-                    'quantity': request_data.quantity,
-                    'expected_total': expected_total,
-                    'calculated_total': calculated_total,
-                    'discrepancy': expected_total - calculated_total
-                }
+                'extra_data': {'adjusted_value': order_value}
             })
-            logger.error(f"CALCULATION ERROR - Expected total: ${expected_total:.2f} but system calculated: ${calculated_total:.2f} (Discrepancy: ${expected_total - calculated_total:.2f})", extra={
-                "trace_id": trace_id,
-                "order_id": request_data.order_id,
-                "scenario": "calculation_error",
-                'extra_data': {
-                    'expected': expected_total,
-                    'actual': calculated_total,
-                    'error_percentage': ((expected_total - calculated_total) / expected_total) * 100,
-                    'reason': 'calculation_mismatch'
-                }
-            })
-            raise HTTPException(
-                status_code=500, 
-                detail=f"Pricing calculation error detected: Expected ${expected_total:.2f} but calculated ${calculated_total:.2f}. Discrepancy of ${expected_total - calculated_total:.2f} exceeds acceptable tolerance. Please retry or contact support."
-            )
         
         logger.info(f"Order value ${order_value:.2f} calculated successfully", 
                    extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'extra_data': {'order_value': order_value}})

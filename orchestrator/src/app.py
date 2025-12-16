@@ -1,6 +1,7 @@
 import logging
 import json
 import uuid
+import asyncio
 from datetime import datetime, time
 from typing import Optional, Dict, Any
 from enum import Enum
@@ -62,9 +63,8 @@ class OrderType(str, Enum):
 
 class OrderRequest(BaseModel):
     symbol: str = Field(..., example="AAPL")
-    quantity: int = Field(..., gt=0, example=100)
+    quantity: int = Field(..., example=100)
     order_type: OrderType = Field(..., example="BUY")
-    scenario: Optional[str] = Field(None, example="success", description="Test scenario: success, market_closed, service_error, calculation_error")
 
 
 class OrderResponse(BaseModel):
@@ -139,29 +139,19 @@ async def place_order(order: OrderRequest, request: Request):
     """
     Place a new order - orchestrates the entire trade flow
     
-    Scenarios (optional in payload):
-    - "success" - Successful execution (default)
-    - "market_closed" - Market closed scenario
-    - "service_error" - Service error scenario
-    - "calculation_error" - Calculation error scenario
-    
     Example payload:
     {
         "symbol": "AAPL",
         "quantity": 50,
-        "order_type": "BUY",
-        "scenario": "market_closed"
+        "order_type": "BUY"
     }
     """
     trace_id = get_trace_id(request.headers.get("X-Trace-Id"))
     order_id = str(uuid.uuid4())
     
-    # Use scenario from payload or default to success
-    scenario = order.scenario if order.scenario else "success"
-    
     logger.info(f"========== ORDER PLACEMENT INITIATED ==========", extra={'trace_id': trace_id, 'order_id': order_id})
-    logger.info(f"Order Details - Symbol: {order.symbol}, Quantity: {order.quantity}, Type: {order.order_type}, Scenario: {scenario}", 
-                extra={'trace_id': trace_id, 'order_id': order_id, 'extra_data': {'symbol': order.symbol, 'quantity': order.quantity, 'order_type': order.order_type.value, 'scenario': scenario}})
+    logger.info(f"Order Details - Symbol: {order.symbol}, Quantity: {order.quantity}, Type: {order.order_type}", 
+                extra={'trace_id': trace_id, 'order_id': order_id, 'extra_data': {'symbol': order.symbol, 'quantity': order.quantity, 'order_type': order.order_type.value}})
     
     try:
         # Step 1: Validate trade with Trade Service
@@ -170,8 +160,7 @@ async def place_order(order: OrderRequest, request: Request):
             "order_id": order_id,
             "symbol": order.symbol,
             "quantity": order.quantity,
-            "order_type": order.order_type.value,
-            "scenario": scenario
+            "order_type": order.order_type.value
         }
         logger.info(f"Sending validation request to {TRADE_SERVICE_URL}/trades/validate", 
                    extra={'trace_id': trace_id, 'order_id': order_id, 'extra_data': trade_data})
@@ -196,14 +185,19 @@ async def place_order(order: OrderRequest, request: Request):
                 details=trade_result
             )
         
+        # Use normalized quantity from validation
+        actual_quantity = trade_result.get("normalized_quantity", order.quantity)
+        if actual_quantity != order.quantity:
+            logger.info(f"Using normalized quantity: {actual_quantity} (original: {order.quantity})", 
+                       extra={'trace_id': trace_id, 'order_id': order_id, 'extra_data': {'original': order.quantity, 'normalized': actual_quantity}})
+        
         # Step 2: Get pricing and PnL from Pricing-PnL Service
         logger.info("STEP 2: Starting pricing and PnL calculation with Pricing-PnL Service", extra={'trace_id': trace_id, 'order_id': order_id})
         pricing_data = {
             "order_id": order_id,
             "symbol": order.symbol,
-            "quantity": order.quantity,
-            "order_type": order.order_type.value,
-            "scenario": scenario
+            "quantity": actual_quantity,
+            "order_type": order.order_type.value
         }
         logger.info(f"Sending pricing request to {PRICING_PNL_SERVICE_URL}/pricing/calculate", 
                    extra={'trace_id': trace_id, 'order_id': order_id, 'extra_data': pricing_data})
@@ -223,21 +217,34 @@ async def place_order(order: OrderRequest, request: Request):
         risk_data = {
             "order_id": order_id,
             "symbol": order.symbol,
-            "quantity": order.quantity,
+            "quantity": actual_quantity,
             "price": pricing_result.get("price"),
             "pnl": pricing_result.get("estimated_pnl"),
-            "order_type": order.order_type.value,
-            "scenario": scenario
+            "order_type": order.order_type.value
         }
         logger.info(f"Sending risk assessment request to {RISK_SERVICE_URL}/risk/assess", 
                    extra={'trace_id': trace_id, 'order_id': order_id, 'extra_data': risk_data})
         
-        risk_result = await call_service(
-            f"{RISK_SERVICE_URL}/risk/assess",
-            "POST",
-            trace_id,
-            risk_data
-        )
+        try:
+            risk_result = await asyncio.wait_for(
+                call_service(
+                    f"{RISK_SERVICE_URL}/risk/assess",
+                    "POST",
+                    trace_id,
+                    risk_data
+                ),
+                timeout=5.0
+            )
+        except asyncio.TimeoutError:
+            logger.error("Risk service timeout - request exceeded 5 second limit", 
+                        extra={'trace_id': trace_id, 'order_id': order_id, 'extra_data': {'service': 'risk_service', 'timeout_seconds': 5}})
+            return OrderResponse(
+                order_id=order_id,
+                status="FAILED",
+                message="Risk assessment service timeout",
+                trace_id=trace_id,
+                details={"error": "Risk service did not respond within timeout period"}
+            )
         
         logger.info(f"Risk Service response - Level: {risk_result.get('risk_level')}, Score: {risk_result.get('risk_score')}, Approved: {risk_result.get('approved')}", 
                    extra={'trace_id': trace_id, 'order_id': order_id, 'extra_data': risk_result})
@@ -265,7 +272,7 @@ async def place_order(order: OrderRequest, request: Request):
         execution_data = {
             "order_id": order_id,
             "symbol": order.symbol,
-            "quantity": order.quantity,
+            "quantity": actual_quantity,
             "price": pricing_result.get("price"),
             "order_type": order.order_type.value
         }

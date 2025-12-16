@@ -60,9 +60,8 @@ class OrderType(str, Enum):
 class TradeValidationRequest(BaseModel):
     order_id: str
     symbol: str = Field(..., example="AAPL")
-    quantity: int = Field(..., gt=0)
+    quantity: int = Field(...)
     order_type: OrderType
-    scenario: Optional[str] = None
 
 
 class TradeExecutionRequest(BaseModel):
@@ -77,6 +76,7 @@ class TradeValidationResponse(BaseModel):
     valid: bool
     reason: Optional[str] = None
     order_id: str
+    normalized_quantity: int
     timestamp: str
 
 
@@ -94,35 +94,37 @@ def get_trace_id(x_trace_id: Optional[str] = Header(None)) -> str:
     return x_trace_id or str(uuid.uuid4())
 
 
-def is_market_open(scenario: Optional[str] = None) -> bool:
+def is_market_open() -> bool:
     """
-    Check if market is open (dummy implementation)
-    Market hours: 9:30 AM - 4:00 PM (simulated)
+    Check if market is open
+    Market hours: 9:30 AM - 4:00 PM
     """
-    if scenario == "market_closed":
-        return False
-    
-    # Dummy check: consider market open between 9 AM and 4 PM
     current_time = datetime.now().time()
-    market_open = time(9, 0)
+    market_open = time(9, 30)
     market_close = time(23, 0)
     
-    # For demo purposes, let's say market is always "open" unless scenario says otherwise
-    return market_open <= current_time <= market_close or scenario == "success"
+    return market_open <= current_time <= market_close
 
 
-def validate_symbol(symbol: str, scenario: Optional[str] = None) -> bool:
+def validate_symbol(symbol: str) -> bool:
     """Validate if symbol is supported"""
-    # Calculation errors should occur in Pricing Service, not here
-    # Trade Service only validates if symbol exists in supported list
     supported_symbols = ["AAPL", "GOOGL", "MSFT", "AMZN", "TSLA", "META", "NVDA"]
     return symbol in supported_symbols
 
 
-def validate_quantity(quantity: int) -> bool:
-    """Validate quantity constraints"""
-    # Quantity must be positive and less than 10000
-    return 0 < quantity < 10000
+def validate_quantity(quantity: int) -> int:
+    """
+    Validate and normalize order quantity
+    Returns normalized quantity
+    """
+    if quantity < 0:
+        return 0
+    
+    # Check maximum limit
+    if quantity > 10000:
+        return -1  # Invalid
+    
+    return quantity
 
 
 @app.get("/")
@@ -146,7 +148,7 @@ async def validate_trade(trade: TradeValidationRequest, request: Request):
     trace_id = get_trace_id(request.headers.get("X-Trace-Id"))
     
     logger.info("========== TRADE VALIDATION REQUEST RECEIVED ==========", extra={'trace_id': trace_id, 'order_id': trade.order_id})
-    logger.info(f"Validating trade - Symbol: {trade.symbol}, Quantity: {trade.quantity}, Type: {trade.order_type}, Scenario: {trade.scenario}", extra={
+    logger.info(f"Validating trade - Symbol: {trade.symbol}, Quantity: {trade.quantity}, Type: {trade.order_type}", extra={
         "trace_id": trace_id,
         "order_id": trade.order_id,
         "symbol": trade.symbol,
@@ -158,7 +160,7 @@ async def validate_trade(trade: TradeValidationRequest, request: Request):
     
     # Check market hours
     logger.info("Checking market hours...", extra={'trace_id': trace_id, 'order_id': trade.order_id})
-    market_open = is_market_open(trade.scenario)
+    market_open = is_market_open()
     logger.info(f"Market status: {'OPEN' if market_open else 'CLOSED'}", extra={'trace_id': trace_id, 'order_id': trade.order_id, 'extra_data': {'market_open': market_open}})
     
     if not market_open:
@@ -171,48 +173,36 @@ async def validate_trade(trade: TradeValidationRequest, request: Request):
             valid=False,
             reason="Market is currently closed. Trading hours: 9:00 AM - 4:00 PM",
             order_id=trade.order_id,
+            normalized_quantity=trade.quantity,
             timestamp=timestamp
         )
-    
-    # Validate symbol
-    logger.info(f"Validating symbol: {trade.symbol}", extra={'trace_id': trace_id, 'order_id': trade.order_id})
-    symbol_valid = validate_symbol(trade.symbol, trade.scenario)
-    logger.info(f"Symbol validation result: {'VALID' if symbol_valid else 'INVALID'}", 
-               extra={'trace_id': trace_id, 'order_id': trade.order_id, 'extra_data': {'symbol': trade.symbol, 'valid': symbol_valid}})
-    
-    if not symbol_valid:
-        logger.warning(f"VALIDATION FAILED - Symbol '{trade.symbol}' is not supported", extra={
-            "trace_id": trace_id,
-            "order_id": trade.order_id,
-            "symbol": trade.symbol,
-            'extra_data': {'supported_symbols': ['AAPL', 'GOOGL', 'MSFT', 'AMZN', 'TSLA', 'META', 'NVDA']}
-        })
-        return TradeValidationResponse(
-            valid=False,
-            reason=f"Symbol '{trade.symbol}' is not supported or invalid",
-            order_id=trade.order_id,
-            timestamp=timestamp
-        )
-    
+        
     # Validate quantity
     logger.info(f"Validating quantity: {trade.quantity}", extra={'trace_id': trace_id, 'order_id': trade.order_id})
-    quantity_valid = validate_quantity(trade.quantity)
-    logger.info(f"Quantity validation result: {'VALID' if quantity_valid else 'INVALID'}", 
-               extra={'trace_id': trace_id, 'order_id': trade.order_id, 'extra_data': {'quantity': trade.quantity, 'valid': quantity_valid, 'max_allowed': 9999}})
+    normalized_qty = validate_quantity(trade.quantity)
     
-    if not quantity_valid:
-        logger.warning(f"VALIDATION FAILED - Quantity {trade.quantity} exceeds allowed limits", extra={
+    if normalized_qty != trade.quantity:
+        logger.info(f"Quantity normalized from {trade.quantity} to {normalized_qty}", extra={'trace_id': trace_id, 'order_id': trade.order_id, 'extra_data': {'original': trade.quantity, 'normalized': normalized_qty}})
+    
+    if normalized_qty == -1:
+        logger.warning(f"VALIDATION FAILED - Quantity {trade.quantity} exceeds maximum limit", extra={
             "trace_id": trace_id,
             "order_id": trade.order_id,
             "quantity": trade.quantity,
-            'extra_data': {'reason': 'quantity_out_of_range', 'max_allowed': 9999, 'min_allowed': 1}
+            'extra_data': {'reason': 'quantity_exceeds_maximum', 'max_allowed': 10000}
         })
         return TradeValidationResponse(
             valid=False,
-            reason=f"Quantity {trade.quantity} is outside acceptable range (1-9999)",
+            reason=f"Quantity {trade.quantity} exceeds maximum limit of 10000",
             order_id=trade.order_id,
+            normalized_quantity=trade.quantity,
             timestamp=timestamp
         )
+    
+    # Update trade with normalized quantity
+    trade.quantity = normalized_qty
+    logger.info(f"Quantity validation passed: {normalized_qty}", 
+               extra={'trace_id': trace_id, 'order_id': trade.order_id})
     
     logger.info("========== TRADE VALIDATION SUCCESSFUL ==========", extra={
         "trace_id": trace_id,
@@ -224,6 +214,7 @@ async def validate_trade(trade: TradeValidationRequest, request: Request):
         valid=True,
         reason=None,
         order_id=trade.order_id,
+        normalized_quantity=normalized_qty,
         timestamp=timestamp
     )
 

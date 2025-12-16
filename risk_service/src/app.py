@@ -1,6 +1,7 @@
 import logging
 import json
 import uuid
+import asyncio
 from datetime import datetime
 from typing import Optional, Dict, Any
 from enum import Enum
@@ -66,11 +67,10 @@ class RiskLevel(str, Enum):
 class RiskAssessmentRequest(BaseModel):
     order_id: str
     symbol: str = Field(..., example="AAPL")
-    quantity: int = Field(..., gt=0)
+    quantity: int = Field(...)
     price: float = Field(..., gt=0)
     pnl: float
     order_type: OrderType
-    scenario: Optional[str] = None
 
 
 class RiskAssessmentResponse(BaseModel):
@@ -204,7 +204,7 @@ async def assess_risk(request_data: RiskAssessmentRequest, request: Request):
     trace_id = get_trace_id(request.headers.get("X-Trace-Id"))
     
     logger.info("========== RISK ASSESSMENT REQUEST RECEIVED ==========", extra={'trace_id': trace_id, 'order_id': request_data.order_id})
-    logger.info(f"Assessing risk for - Symbol: {request_data.symbol}, Quantity: {request_data.quantity}, Price: ${request_data.price}, PnL: ${request_data.pnl}, Type: {request_data.order_type}, Scenario: {request_data.scenario}", extra={
+    logger.info(f"Assessing risk for - Symbol: {request_data.symbol}, Quantity: {request_data.quantity}, Price: ${request_data.price}, PnL: ${request_data.pnl}, Type: {request_data.order_type}", extra={
         "trace_id": trace_id,
         "order_id": request_data.order_id,
         "symbol": request_data.symbol,
@@ -212,18 +212,15 @@ async def assess_risk(request_data: RiskAssessmentRequest, request: Request):
         "price": request_data.price
     })
     
-    # Scenario-based errors
-    if request_data.scenario == "service_error":
-        logger.error("RISK ASSESSMENT FAILED - Service error scenario triggered (simulated outage)", extra={
-            "trace_id": trace_id,
-            "order_id": request_data.order_id,
-            "scenario": "service_error"
-        })
-        raise HTTPException(status_code=503, detail="Risk assessment service temporarily unavailable")
-    
     try:
         # Calculate risk score
         logger.info("Calculating multi-factor risk score...", extra={'trace_id': trace_id, 'order_id': request_data.order_id})
+        
+        position_value = abs(request_data.quantity * request_data.price)
+        if position_value > 500000:
+            logger.info(f"High-value order detected (${position_value:.2f}), performing extended risk analysis...", extra={'trace_id': trace_id, 'order_id': request_data.order_id})
+            await asyncio.sleep(6)  
+        
         risk_score, risk_factors = calculate_risk_score(
             request_data.symbol,
             request_data.quantity,
