@@ -171,12 +171,21 @@ async def calculate_pricing(request_data: PricingRequest, request: Request):
     
     # Scenario-based errors
     if request_data.scenario == "service_error":
-        logger.error("PRICING FAILED - Service error scenario triggered (simulated outage)", extra={
+        logger.error("PRICING FAILED - External market data API unavailable (NASDAQ feed timeout)", extra={
             "trace_id": trace_id,
             "order_id": request_data.order_id,
-            "scenario": "service_error"
+            "scenario": "service_error",
+            "extra_data": {
+                "error_type": "external_api_failure",
+                "provider": "NASDAQ Market Data API",
+                "symbol": request_data.symbol,
+                "reason": "Connection timeout after 5000ms"
+            }
         })
-        raise HTTPException(status_code=503, detail="Pricing service temporarily unavailable")
+        raise HTTPException(
+            status_code=503, 
+            detail=f"Market data service unavailable. Unable to fetch current price for {request_data.symbol} from NASDAQ Market Data API. The external data provider is experiencing connectivity issues. Please retry in a few moments."
+        )
     
     try:
         # Get market price

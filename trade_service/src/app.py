@@ -156,15 +156,6 @@ async def validate_trade(trade: TradeValidationRequest, request: Request):
     
     timestamp = datetime.now().isoformat()
     
-    # Scenario-based validation
-    if trade.scenario == "service_error":
-        logger.error("VALIDATION FAILED - Service error scenario triggered (simulated outage)", extra={
-            "trace_id": trace_id,
-            "order_id": trade.order_id,
-            "scenario": "service_error"
-        })
-        raise HTTPException(status_code=503, detail="Trade validation service temporarily unavailable")
-    
     # Check market hours
     logger.info("Checking market hours...", extra={'trace_id': trace_id, 'order_id': trade.order_id})
     market_open = is_market_open(trade.scenario)
