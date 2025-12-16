@@ -161,7 +161,8 @@ async def calculate_pricing(request_data: PricingRequest, request: Request):
     """
     trace_id = get_trace_id(request.headers.get("X-Trace-Id"))
     
-    logger.info("Pricing calculation started", extra={
+    logger.info("========== PRICING CALCULATION REQUEST RECEIVED ==========", extra={'trace_id': trace_id, 'order_id': request_data.order_id})
+    logger.info(f"Calculating pricing for - Symbol: {request_data.symbol}, Quantity: {request_data.quantity}, Type: {request_data.order_type}, Scenario: {request_data.scenario}", extra={
         "trace_id": trace_id,
         "order_id": request_data.order_id,
         "symbol": request_data.symbol,
@@ -170,42 +171,75 @@ async def calculate_pricing(request_data: PricingRequest, request: Request):
     
     # Scenario-based errors
     if request_data.scenario == "service_error":
-        logger.error("Pricing calculation failed - service error scenario", extra={
+        logger.error("PRICING FAILED - Service error scenario triggered (simulated outage)", extra={
             "trace_id": trace_id,
             "order_id": request_data.order_id,
             "scenario": "service_error"
         })
         raise HTTPException(status_code=503, detail="Pricing service temporarily unavailable")
     
-    if request_data.scenario == "calculation_error":
-        logger.error("Pricing calculation failed - calculation error scenario", extra={
-            "trace_id": trace_id,
-            "order_id": request_data.order_id,
-            "scenario": "calculation_error"
-        })
-        raise HTTPException(status_code=500, detail="Unable to calculate price for this symbol - invalid symbol data")
-    
     try:
         # Get market price
+        logger.info(f"Fetching market price for symbol: {request_data.symbol}", extra={'trace_id': trace_id, 'order_id': request_data.order_id})
         current_price = get_market_price(request_data.symbol, request_data.scenario)
         
-        logger.info("Market price retrieved", extra={
+        logger.info(f"Market price retrieved: ${current_price}", extra={
             "trace_id": trace_id,
             "order_id": request_data.order_id,
             "symbol": request_data.symbol,
             "price": current_price
         })
         
+        # Calculate total order value
+        order_value = current_price * request_data.quantity
+        logger.info(f"Calculating total order value: {request_data.quantity} x ${current_price} = ${order_value}", 
+                   extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'extra_data': {'order_value': order_value}})
+        
+        # Realistic calculation_error: Check order value limits
+        MAX_ORDER_VALUE = 500000  # $500,000 limit
+        if request_data.scenario == "calculation_error":
+            logger.warning(f"Order value validation triggered: ${order_value:.2f} (Limit: ${MAX_ORDER_VALUE})", 
+                         extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'extra_data': {'order_value': order_value, 'max_limit': MAX_ORDER_VALUE}})
+            if order_value > MAX_ORDER_VALUE:
+                logger.error(f"CALCULATION ERROR - Order value ${order_value:.2f} exceeds maximum allowed limit of ${MAX_ORDER_VALUE}", extra={
+                    "trace_id": trace_id,
+                    "order_id": request_data.order_id,
+                    "scenario": "calculation_error",
+                    'extra_data': {'order_value': order_value, 'max_limit': MAX_ORDER_VALUE, 'excess_amount': order_value - MAX_ORDER_VALUE}
+                })
+                raise HTTPException(status_code=400, detail=f"Order value ${order_value:.2f} exceeds maximum allowed limit of ${MAX_ORDER_VALUE}. Please reduce quantity or split into multiple orders.")
+            else:
+                # Force error even if value is below limit for demo purposes
+                logger.error(f"CALCULATION ERROR - Simulated business rule violation: Order value ${order_value:.2f} flagged for review (Scenario: calculation_error)", extra={
+                    "trace_id": trace_id,
+                    "order_id": request_data.order_id,
+                    "scenario": "calculation_error",
+                    'extra_data': {'order_value': order_value, 'reason': 'simulated_limit_check_failure'}
+                })
+                raise HTTPException(status_code=400, detail=f"Order value ${order_value:.2f} exceeds maximum allowed limit of ${MAX_ORDER_VALUE}. Please reduce quantity.")
+        
+        logger.info(f"Order value ${order_value:.2f} is within acceptable limits", 
+                   extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'extra_data': {'order_value': order_value}})
+        
         # Calculate PnL
+        logger.info("Calculating estimated profit/loss (PnL)", extra={'trace_id': trace_id, 'order_id': request_data.order_id})
+        cost_basis = get_cost_basis(request_data.symbol)
+        logger.info(f"Cost basis for {request_data.symbol}: ${cost_basis}", 
+                   extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'extra_data': {'cost_basis': cost_basis}})
+        
         estimated_pnl = calculate_pnl(
             request_data.symbol,
             request_data.quantity,
             current_price,
             request_data.order_type
         )
+        logger.info(f"Estimated PnL calculated: ${estimated_pnl} ({request_data.order_type} order)", 
+                   extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'extra_data': {'estimated_pnl': estimated_pnl, 'order_type': request_data.order_type.value}})
         
         # Calculate total cost
         total_cost = current_price * request_data.quantity
+        logger.info(f"Total order cost: ${total_cost}", 
+                   extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'extra_data': {'total_cost': total_cost}})
         
         timestamp = datetime.now().isoformat()
         
@@ -220,12 +254,16 @@ async def calculate_pricing(request_data: PricingRequest, request: Request):
             "timestamp": timestamp
         }
         
-        logger.info("Pricing and PnL calculated successfully", extra={
+        logger.info("========== PRICING CALCULATION COMPLETED ==========", extra={
             "trace_id": trace_id,
             "order_id": request_data.order_id,
-            "price": current_price,
-            "estimated_pnl": estimated_pnl,
-            "total_cost": total_cost
+            'extra_data': {
+                'symbol': request_data.symbol,
+                'price': current_price,
+                'quantity': request_data.quantity,
+                'estimated_pnl': estimated_pnl,
+                'total_cost': total_cost
+            }
         })
         
         return PricingResponse(

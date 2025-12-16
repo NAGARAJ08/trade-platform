@@ -153,11 +153,13 @@ async def place_order(order: OrderRequest, request: Request):
     # Use scenario from payload or default to success
     scenario = order.scenario if order.scenario else "success"
     
-    logger.info(f"Order placement started - symbol: {order.symbol}, quantity: {order.quantity}, type: {order.order_type}", 
-                extra={'trace_id': trace_id, 'order_id': order_id, 'extra_data': {'symbol': order.symbol, 'quantity': order.quantity}})
+    logger.info(f"========== ORDER PLACEMENT INITIATED ==========", extra={'trace_id': trace_id, 'order_id': order_id})
+    logger.info(f"Order Details - Symbol: {order.symbol}, Quantity: {order.quantity}, Type: {order.order_type}, Scenario: {scenario}", 
+                extra={'trace_id': trace_id, 'order_id': order_id, 'extra_data': {'symbol': order.symbol, 'quantity': order.quantity, 'order_type': order.order_type.value, 'scenario': scenario}})
     
     try:
         # Step 1: Validate trade with Trade Service
+        logger.info("STEP 1: Starting trade validation with Trade Service", extra={'trace_id': trace_id, 'order_id': order_id})
         trade_data = {
             "order_id": order_id,
             "symbol": order.symbol,
@@ -165,8 +167,8 @@ async def place_order(order: OrderRequest, request: Request):
             "order_type": order.order_type.value,
             "scenario": scenario
         }
-        
-        logger.info("Calling Trade Service for validation", extra={'trace_id': trace_id, 'order_id': order_id})
+        logger.info(f"Sending validation request to {TRADE_SERVICE_URL}/trades/validate", 
+                   extra={'trace_id': trace_id, 'order_id': order_id, 'extra_data': trade_data})
         trade_result = await call_service(
             f"{TRADE_SERVICE_URL}/trades/validate",
             "POST",
@@ -174,8 +176,12 @@ async def place_order(order: OrderRequest, request: Request):
             trade_data
         )
         
+        logger.info(f"Trade Service response received - Valid: {trade_result.get('valid')}", 
+                   extra={'trace_id': trace_id, 'order_id': order_id, 'extra_data': trade_result})
+        
         if not trade_result.get("valid"):
-            logger.warning(f"Trade validation failed - {trade_result.get('reason')}", extra={'trace_id': trace_id, 'order_id': order_id})
+            logger.warning(f"VALIDATION FAILED - Reason: {trade_result.get('reason')}", 
+                         extra={'trace_id': trace_id, 'order_id': order_id, 'extra_data': {'reason': trade_result.get('reason')}})
             return OrderResponse(
                 order_id=order_id,
                 status="REJECTED",
@@ -185,7 +191,7 @@ async def place_order(order: OrderRequest, request: Request):
             )
         
         # Step 2: Get pricing and PnL from Pricing-PnL Service
-        logger.info("Calling Pricing-PnL Service", extra={'trace_id': trace_id, 'order_id': order_id})
+        logger.info("STEP 2: Starting pricing and PnL calculation with Pricing-PnL Service", extra={'trace_id': trace_id, 'order_id': order_id})
         pricing_data = {
             "order_id": order_id,
             "symbol": order.symbol,
@@ -193,6 +199,8 @@ async def place_order(order: OrderRequest, request: Request):
             "order_type": order.order_type.value,
             "scenario": scenario
         }
+        logger.info(f"Sending pricing request to {PRICING_PNL_SERVICE_URL}/pricing/calculate", 
+                   extra={'trace_id': trace_id, 'order_id': order_id, 'extra_data': pricing_data})
         
         pricing_result = await call_service(
             f"{PRICING_PNL_SERVICE_URL}/pricing/calculate",
@@ -201,8 +209,11 @@ async def place_order(order: OrderRequest, request: Request):
             pricing_data
         )
         
+        logger.info(f"Pricing Service response - Price: ${pricing_result.get('price')}, Total Cost: ${pricing_result.get('total_cost')}, Est. PnL: ${pricing_result.get('estimated_pnl')}", 
+                   extra={'trace_id': trace_id, 'order_id': order_id, 'extra_data': pricing_result})
+        
         # Step 3: Assess risk with Risk Service
-        logger.info("Calling Risk Service", extra={'trace_id': trace_id, 'order_id': order_id})
+        logger.info("STEP 3: Starting risk assessment with Risk Service", extra={'trace_id': trace_id, 'order_id': order_id})
         risk_data = {
             "order_id": order_id,
             "symbol": order.symbol,
@@ -212,6 +223,8 @@ async def place_order(order: OrderRequest, request: Request):
             "order_type": order.order_type.value,
             "scenario": scenario
         }
+        logger.info(f"Sending risk assessment request to {RISK_SERVICE_URL}/risk/assess", 
+                   extra={'trace_id': trace_id, 'order_id': order_id, 'extra_data': risk_data})
         
         risk_result = await call_service(
             f"{RISK_SERVICE_URL}/risk/assess",
@@ -220,9 +233,15 @@ async def place_order(order: OrderRequest, request: Request):
             risk_data
         )
         
+        logger.info(f"Risk Service response - Level: {risk_result.get('risk_level')}, Score: {risk_result.get('risk_score')}, Approved: {risk_result.get('approved')}", 
+                   extra={'trace_id': trace_id, 'order_id': order_id, 'extra_data': risk_result})
+        logger.info(f"Risk Recommendation: {risk_result.get('recommendation')}", 
+                   extra={'trace_id': trace_id, 'order_id': order_id})
+        
         # Check if risk is acceptable
         if risk_result.get("risk_level") == "HIGH" and risk_result.get("approved") is False:
-            logger.warning("Order rejected due to high risk", extra={'trace_id': trace_id, 'order_id': order_id, 'extra_data': {'risk_level': 'HIGH'}})
+            logger.warning("ORDER REJECTED - High risk assessment failed approval", 
+                         extra={'trace_id': trace_id, 'order_id': order_id, 'extra_data': {'risk_level': 'HIGH', 'risk_score': risk_result.get('risk_score')}})
             return OrderResponse(
                 order_id=order_id,
                 status="REJECTED",
@@ -236,7 +255,7 @@ async def place_order(order: OrderRequest, request: Request):
             )
         
         # Step 4: Execute the trade
-        logger.info("Executing trade", extra={'trace_id': trace_id, 'order_id': order_id})
+        logger.info("STEP 4: Proceeding with trade execution at Trade Service", extra={'trace_id': trace_id, 'order_id': order_id})
         execution_data = {
             "order_id": order_id,
             "symbol": order.symbol,
@@ -244,6 +263,8 @@ async def place_order(order: OrderRequest, request: Request):
             "price": pricing_result.get("price"),
             "order_type": order.order_type.value
         }
+        logger.info(f"Sending execution request to {TRADE_SERVICE_URL}/trades/execute", 
+                   extra={'trace_id': trace_id, 'order_id': order_id, 'extra_data': execution_data})
         
         execution_result = await call_service(
             f"{TRADE_SERVICE_URL}/trades/execute",
@@ -252,14 +273,20 @@ async def place_order(order: OrderRequest, request: Request):
             execution_data
         )
         
-        logger.info("Order executed successfully", extra={
+        logger.info(f"Trade execution completed - Status: {execution_result.get('status')}, Time: {execution_result.get('execution_time')}", 
+                   extra={'trace_id': trace_id, 'order_id': order_id, 'extra_data': execution_result})
+        logger.info("========== ORDER EXECUTED SUCCESSFULLY ==========", extra={
             'trace_id': trace_id,
             'order_id': order_id,
             'extra_data': {
-                'status': 'EXECUTED',
+                'final_status': 'EXECUTED',
+                'symbol': order.symbol,
+                'quantity': order.quantity,
                 'price': pricing_result.get('price'),
+                'total_cost': pricing_result.get('total_cost'),
                 'estimated_pnl': pricing_result.get('estimated_pnl'),
-                'risk_level': risk_result.get('risk_level')
+                'risk_level': risk_result.get('risk_level'),
+                'risk_score': risk_result.get('risk_score')
             }
         })
         

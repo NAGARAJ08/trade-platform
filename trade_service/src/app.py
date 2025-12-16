@@ -113,9 +113,8 @@ def is_market_open(scenario: Optional[str] = None) -> bool:
 
 def validate_symbol(symbol: str, scenario: Optional[str] = None) -> bool:
     """Validate if symbol is supported"""
-    if scenario == "calculation_error":
-        return False
-    
+    # Calculation errors should occur in Pricing Service, not here
+    # Trade Service only validates if symbol exists in supported list
     supported_symbols = ["AAPL", "GOOGL", "MSFT", "AMZN", "TSLA", "META", "NVDA"]
     return symbol in supported_symbols
 
@@ -146,7 +145,8 @@ async def validate_trade(trade: TradeValidationRequest, request: Request):
     """
     trace_id = get_trace_id(request.headers.get("X-Trace-Id"))
     
-    logger.info("Trade validation started", extra={
+    logger.info("========== TRADE VALIDATION REQUEST RECEIVED ==========", extra={'trace_id': trace_id, 'order_id': trade.order_id})
+    logger.info(f"Validating trade - Symbol: {trade.symbol}, Quantity: {trade.quantity}, Type: {trade.order_type}, Scenario: {trade.scenario}", extra={
         "trace_id": trace_id,
         "order_id": trade.order_id,
         "symbol": trade.symbol,
@@ -158,7 +158,7 @@ async def validate_trade(trade: TradeValidationRequest, request: Request):
     
     # Scenario-based validation
     if trade.scenario == "service_error":
-        logger.error("Trade validation failed - service error scenario", extra={
+        logger.error("VALIDATION FAILED - Service error scenario triggered (simulated outage)", extra={
             "trace_id": trace_id,
             "order_id": trade.order_id,
             "scenario": "service_error"
@@ -166,10 +166,15 @@ async def validate_trade(trade: TradeValidationRequest, request: Request):
         raise HTTPException(status_code=503, detail="Trade validation service temporarily unavailable")
     
     # Check market hours
-    if not is_market_open(trade.scenario):
-        logger.warning("Trade validation failed - market closed", extra={
+    logger.info("Checking market hours...", extra={'trace_id': trace_id, 'order_id': trade.order_id})
+    market_open = is_market_open(trade.scenario)
+    logger.info(f"Market status: {'OPEN' if market_open else 'CLOSED'}", extra={'trace_id': trace_id, 'order_id': trade.order_id, 'extra_data': {'market_open': market_open}})
+    
+    if not market_open:
+        logger.warning("VALIDATION FAILED - Market is currently closed", extra={
             "trace_id": trace_id,
-            "order_id": trade.order_id
+            "order_id": trade.order_id,
+            'extra_data': {'reason': 'market_closed', 'trading_hours': '9:00 AM - 4:00 PM'}
         })
         return TradeValidationResponse(
             valid=False,
@@ -179,11 +184,17 @@ async def validate_trade(trade: TradeValidationRequest, request: Request):
         )
     
     # Validate symbol
-    if not validate_symbol(trade.symbol, trade.scenario):
-        logger.warning("Trade validation failed - invalid symbol", extra={
+    logger.info(f"Validating symbol: {trade.symbol}", extra={'trace_id': trace_id, 'order_id': trade.order_id})
+    symbol_valid = validate_symbol(trade.symbol, trade.scenario)
+    logger.info(f"Symbol validation result: {'VALID' if symbol_valid else 'INVALID'}", 
+               extra={'trace_id': trace_id, 'order_id': trade.order_id, 'extra_data': {'symbol': trade.symbol, 'valid': symbol_valid}})
+    
+    if not symbol_valid:
+        logger.warning(f"VALIDATION FAILED - Symbol '{trade.symbol}' is not supported", extra={
             "trace_id": trace_id,
             "order_id": trade.order_id,
-            "symbol": trade.symbol
+            "symbol": trade.symbol,
+            'extra_data': {'supported_symbols': ['AAPL', 'GOOGL', 'MSFT', 'AMZN', 'TSLA', 'META', 'NVDA']}
         })
         return TradeValidationResponse(
             valid=False,
@@ -193,11 +204,17 @@ async def validate_trade(trade: TradeValidationRequest, request: Request):
         )
     
     # Validate quantity
-    if not validate_quantity(trade.quantity):
-        logger.warning("Trade validation failed - invalid quantity", extra={
+    logger.info(f"Validating quantity: {trade.quantity}", extra={'trace_id': trace_id, 'order_id': trade.order_id})
+    quantity_valid = validate_quantity(trade.quantity)
+    logger.info(f"Quantity validation result: {'VALID' if quantity_valid else 'INVALID'}", 
+               extra={'trace_id': trace_id, 'order_id': trade.order_id, 'extra_data': {'quantity': trade.quantity, 'valid': quantity_valid, 'max_allowed': 9999}})
+    
+    if not quantity_valid:
+        logger.warning(f"VALIDATION FAILED - Quantity {trade.quantity} exceeds allowed limits", extra={
             "trace_id": trace_id,
             "order_id": trade.order_id,
-            "quantity": trade.quantity
+            "quantity": trade.quantity,
+            'extra_data': {'reason': 'quantity_out_of_range', 'max_allowed': 9999, 'min_allowed': 1}
         })
         return TradeValidationResponse(
             valid=False,
@@ -206,9 +223,10 @@ async def validate_trade(trade: TradeValidationRequest, request: Request):
             timestamp=timestamp
         )
     
-    logger.info("Trade validation successful", extra={
+    logger.info("========== TRADE VALIDATION SUCCESSFUL ==========", extra={
         "trace_id": trace_id,
-        "order_id": trade.order_id
+        "order_id": trade.order_id,
+        'extra_data': {'symbol': trade.symbol, 'quantity': trade.quantity, 'order_type': trade.order_type.value}
     })
     
     return TradeValidationResponse(
@@ -226,7 +244,8 @@ async def execute_trade(trade: TradeExecutionRequest, request: Request):
     """
     trace_id = get_trace_id(request.headers.get("X-Trace-Id"))
     
-    logger.info("Trade execution started", extra={
+    logger.info("========== TRADE EXECUTION REQUEST RECEIVED ==========", extra={'trace_id': trace_id, 'order_id': trade.order_id})
+    logger.info(f"Executing trade - Symbol: {trade.symbol}, Quantity: {trade.quantity}, Price: ${trade.price}, Type: {trade.order_type}", extra={
         "trace_id": trace_id,
         "order_id": trade.order_id,
         "symbol": trade.symbol,
@@ -237,6 +256,7 @@ async def execute_trade(trade: TradeExecutionRequest, request: Request):
     execution_time = datetime.now().isoformat()
     
     # Store trade in database
+    logger.info("Storing trade in database...", extra={'trace_id': trace_id, 'order_id': trade.order_id})
     trades_db[trade.order_id] = {
         "order_id": trade.order_id,
         "symbol": trade.symbol,
@@ -247,11 +267,17 @@ async def execute_trade(trade: TradeExecutionRequest, request: Request):
         "execution_time": execution_time
     }
     
-    logger.info("Trade executed successfully", extra={
+    logger.info("========== TRADE EXECUTED SUCCESSFULLY ==========", extra={
         "trace_id": trace_id,
         "order_id": trade.order_id,
-        "status": "EXECUTED",
-        "execution_time": execution_time
+        'extra_data': {
+            "status": "EXECUTED",
+            "execution_time": execution_time,
+            "symbol": trade.symbol,
+            "quantity": trade.quantity,
+            "price": trade.price,
+            "total_value": trade.quantity * trade.price
+        }
     })
     
     return TradeExecutionResponse(
