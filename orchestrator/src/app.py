@@ -32,16 +32,14 @@ class JsonFormatter(logging.Formatter):
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-# File handler with JSON format
-file_handler = logging.FileHandler('../logs/orchestrator.log')
-file_handler.setFormatter(JsonFormatter())
-
 # Console handler with readable format
 console_handler = logging.StreamHandler()
 console_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - orchestrator - %(message)s'))
 
-logger.addHandler(file_handler)
 logger.addHandler(console_handler)
+
+# Store trace-specific handlers
+trace_handlers = {}
 
 # FastAPI app
 app = FastAPI(
@@ -78,6 +76,16 @@ class OrderResponse(BaseModel):
 def get_trace_id(x_trace_id: Optional[str] = Header(None)) -> str:
     """Generate or use existing trace ID"""
     return x_trace_id or str(uuid.uuid4())
+
+
+def get_trace_logger(trace_id: str):
+    """Get or create a logger for specific trace_id"""
+    if trace_id not in trace_handlers:
+        trace_file_handler = logging.FileHandler(f'../logs/{trace_id}.log')
+        trace_file_handler.setFormatter(JsonFormatter())
+        trace_handlers[trace_id] = trace_file_handler
+        logger.addHandler(trace_file_handler)
+    return logger
 
 
 def is_market_open(current_time: datetime) -> bool:
@@ -148,6 +156,9 @@ async def place_order(order: OrderRequest, request: Request):
     """
     trace_id = get_trace_id(request.headers.get("X-Trace-Id"))
     order_id = str(uuid.uuid4())
+    
+    # Create trace-specific log file
+    get_trace_logger(trace_id)
     
     logger.info(f"========== ORDER PLACEMENT INITIATED ==========", extra={'trace_id': trace_id, 'order_id': order_id})
     logger.info(f"Order Details - Symbol: {order.symbol}, Quantity: {order.quantity}, Type: {order.order_type}", 

@@ -31,16 +31,23 @@ class JsonFormatter(logging.Formatter):
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-# File handler with JSON format
-file_handler = logging.FileHandler('../logs/pricing_pnl_service.log')
-file_handler.setFormatter(JsonFormatter())
-
 # Console handler with readable format
 console_handler = logging.StreamHandler()
 console_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - pricing_pnl_service - %(message)s'))
 
-logger.addHandler(file_handler)
 logger.addHandler(console_handler)
+
+# Store trace-specific handlers
+trace_handlers = {}
+
+def get_trace_logger(trace_id: str):
+    """Get or create a logger for specific trace_id"""
+    if trace_id not in trace_handlers:
+        trace_file_handler = logging.FileHandler(f'../logs/{trace_id}.log')
+        trace_file_handler.setFormatter(JsonFormatter())
+        trace_handlers[trace_id] = trace_file_handler
+        logger.addHandler(trace_file_handler)
+    return logger
 
 # FastAPI app
 app = FastAPI(
@@ -163,6 +170,9 @@ async def calculate_pricing(request_data: PricingRequest, request: Request):
     This combines pricing lookup and PnL estimation
     """
     trace_id = get_trace_id(request.headers.get("X-Trace-Id"))
+    
+    # Create trace-specific log file
+    get_trace_logger(trace_id)
     
     logger.info("========== PRICING CALCULATION REQUEST RECEIVED ==========", extra={'trace_id': trace_id, 'order_id': request_data.order_id})
     logger.info(f"Calculating pricing for - Symbol: {request_data.symbol}, Quantity: {request_data.quantity}, Type: {request_data.order_type}", extra={
