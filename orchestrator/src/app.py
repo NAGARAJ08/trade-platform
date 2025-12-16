@@ -164,6 +164,11 @@ async def place_order(order: OrderRequest, request: Request):
     logger.info(f"Order Details - Symbol: {order.symbol}, Quantity: {order.quantity}, Type: {order.order_type}", 
                 extra={'trace_id': trace_id, 'order_id': order_id, 'extra_data': {'symbol': order.symbol, 'quantity': order.quantity, 'order_type': order.order_type.value}})
     
+    # Store partial results for detailed error reporting
+    trade_result = None
+    pricing_result = None
+    risk_result = None
+    
     try:
         # Step 1: Validate trade with Trade Service
         logger.info("STEP 1: Starting trade validation with Trade Service", extra={'trace_id': trace_id, 'order_id': order_id})
@@ -254,7 +259,15 @@ async def place_order(order: OrderRequest, request: Request):
                 status="FAILED",
                 message="Risk assessment service timeout",
                 trace_id=trace_id,
-                details={"error": "Risk service did not respond within timeout period"}
+                details={
+                    "validation": trade_result,
+                    "pricing": pricing_result,
+                    "risk": {
+                        "error": "timeout",
+                        "message": "Risk service did not respond within timeout period (5 seconds)",
+                        "attempted_at": datetime.now().isoformat()
+                    }
+                }
             )
         
         logger.info(f"Risk Service response - Level: {risk_result.get('risk_level')}, Score: {risk_result.get('risk_score')}, Approved: {risk_result.get('approved')}", 
@@ -328,7 +341,29 @@ async def place_order(order: OrderRequest, request: Request):
         
     except HTTPException as e:
         logger.error(f"Order placement failed - {str(e.detail)}", extra={'trace_id': trace_id, 'order_id': order_id})
-        raise
+        
+        # Build error response with partial results
+        error_details = {}
+        if trade_result:
+            error_details["validation"] = trade_result
+        if pricing_result:
+            error_details["pricing"] = pricing_result
+        if risk_result:
+            error_details["risk"] = risk_result
+        
+        error_details["error"] = {
+            "stage": "pricing" if trade_result and not pricing_result else "risk" if pricing_result and not risk_result else "validation",
+            "message": str(e.detail),
+            "status_code": e.status_code
+        }
+        
+        return OrderResponse(
+            order_id=order_id,
+            status="FAILED",
+            message=str(e.detail),
+            trace_id=trace_id,
+            details=error_details
+        )
     except Exception as e:
         logger.error(f"Order placement failed - {str(e)}", extra={'trace_id': trace_id, 'order_id': order_id})
         raise HTTPException(status_code=500, detail=f"Order placement failed: {str(e)}")

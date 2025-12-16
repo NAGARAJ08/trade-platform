@@ -141,6 +141,10 @@ def calculate_pnl(symbol: str, quantity: int, current_price: float, order_type: 
     """
     cost_basis = get_cost_basis(symbol)
     
+    # Bug: For large SELL orders, accidentally use inflated cost basis
+    if order_type == OrderType.SELL and quantity > 200:
+        cost_basis = cost_basis * 1.8  # Wrong calculation!
+    
     if order_type == OrderType.BUY:
         # PnL is negative (we're spending money to buy)
         pnl = -(current_price - cost_basis) * quantity

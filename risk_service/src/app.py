@@ -226,10 +226,56 @@ async def assess_risk(request_data: RiskAssessmentRequest, request: Request):
         # Calculate risk score
         logger.info("Calculating multi-factor risk score...", extra={'trace_id': trace_id, 'order_id': request_data.order_id})
         
+        # Simulate slow processing for high-value orders
         position_value = abs(request_data.quantity * request_data.price)
         if position_value > 500000:
             logger.info(f"High-value order detected (${position_value:.2f}), performing extended risk analysis...", extra={'trace_id': trace_id, 'order_id': request_data.order_id})
-            await asyncio.sleep(6)  
+            await asyncio.sleep(6)  # Takes too long, will timeout
+        
+        # PnL integrity check - detect if PnL calculation seems wrong
+        pnl_ratio = abs(request_data.pnl) / position_value if position_value > 0 else 0
+        
+        # Additional check: For SELL orders, verify PnL makes sense
+        if request_data.order_type == "SELL" and request_data.pnl < 0:
+            loss_percentage = abs(request_data.pnl) / position_value * 100
+            if loss_percentage > 15:
+                logger.error(f"Detected upstream calculation error - SELL order showing {loss_percentage:.1f}% loss", extra={
+                    'trace_id': trace_id,
+                    'order_id': request_data.order_id,
+                    'extra_data': {
+                        'detection_service': 'risk_service',
+                        'suspected_source': 'pricing_service_pnl_calculation',
+                        'order_type': 'SELL',
+                        'quantity': request_data.quantity,
+                        'sell_price': request_data.price,
+                        'received_pnl': request_data.pnl,
+                        'position_value': position_value,
+                        'loss_percentage': loss_percentage,
+                        'issue': 'SELL orders should profit when current price > cost basis, but showing large loss',
+                        'recommendation': 'Check pricing service calculate_pnl() function for SELL order logic'
+                    }
+                })
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Risk service blocked execution: Received invalid PnL data from pricing service. SELL order (qty={request_data.quantity}, price=${request_data.price}) shows unrealistic loss of ${request_data.pnl} ({loss_percentage:.1f}%). SELL orders should profit when sell price exceeds cost basis. Upstream pricing calculation error suspected."
+                )
+        
+        if pnl_ratio > 0.15:  # PnL shouldn't exceed 15% of position value in normal cases
+            logger.error(f"PnL integrity check failed - PnL (${request_data.pnl}) is {pnl_ratio*100:.1f}% of position value (${position_value})", extra={
+                'trace_id': trace_id,
+                'order_id': request_data.order_id,
+                'extra_data': {
+                    'pnl': request_data.pnl,
+                    'position_value': position_value,
+                    'pnl_ratio': pnl_ratio,
+                    'threshold': 0.15,
+                    'check_failed': 'pnl_integrity'
+                }
+            })
+            raise HTTPException(
+                status_code=422,
+                detail=f"Risk assessment failed: PnL calculation integrity check failed. Estimated PnL (${request_data.pnl}) appears inconsistent with position value (${position_value}). Please verify pricing calculations."
+            )
         
         risk_score, risk_factors = calculate_risk_score(
             request_data.symbol,
