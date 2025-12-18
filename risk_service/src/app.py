@@ -40,11 +40,21 @@ logger.addHandler(console_handler)
 # Store trace-specific handlers
 trace_handlers = {}
 
+class TraceFilter(logging.Filter):
+    """Filter logs by trace_id"""
+    def __init__(self, trace_id):
+        super().__init__()
+        self.trace_id = trace_id
+    
+    def filter(self, record):
+        return hasattr(record, 'trace_id') and record.trace_id == self.trace_id
+
 def get_trace_logger(trace_id: str):
     """Get or create a logger for specific trace_id"""
     if trace_id not in trace_handlers:
         trace_file_handler = logging.FileHandler(f'../logs/{trace_id}.log')
         trace_file_handler.setFormatter(JsonFormatter())
+        trace_file_handler.addFilter(TraceFilter(trace_id))  # Only log for this trace_id
         trace_handlers[trace_id] = trace_file_handler
         logger.addHandler(trace_file_handler)
     return logger
