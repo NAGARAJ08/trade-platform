@@ -213,10 +213,11 @@ async def assess_risk(request_data: RiskAssessmentRequest, request: Request):
     # Create trace-specific log file
     get_trace_logger(trace_id)
     
-    logger.info("========== RISK ASSESSMENT REQUEST RECEIVED ==========", extra={'trace_id': trace_id, 'order_id': request_data.order_id})
-    logger.info(f"Assessing risk for - Symbol: {request_data.symbol}, Quantity: {request_data.quantity}, Price: ${request_data.price}, PnL: ${request_data.pnl}, Type: {request_data.order_type}", extra={
+    logger.info("[assess_risk] Risk assessment request received", extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'function': 'assess_risk'})
+    logger.info(f"[assess_risk] Assessing risk for - Symbol: {request_data.symbol}, Quantity: {request_data.quantity}, Price: ${request_data.price}, PnL: ${request_data.pnl}, Type: {request_data.order_type}", extra={
         "trace_id": trace_id,
         "order_id": request_data.order_id,
+        "function": "assess_risk",
         "symbol": request_data.symbol,
         "quantity": request_data.quantity,
         "price": request_data.price
@@ -224,12 +225,12 @@ async def assess_risk(request_data: RiskAssessmentRequest, request: Request):
     
     try:
         # Calculate risk score
-        logger.info("Calculating multi-factor risk score...", extra={'trace_id': trace_id, 'order_id': request_data.order_id})
+        logger.info("[assess_risk] calculate_risk_score processing...", extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'function': 'calculate_risk_score'})
         
         # Simulate slow processing for high-value orders
         position_value = abs(request_data.quantity * request_data.price)
         if position_value > 500000:
-            logger.info(f"High-value order detected (${position_value:.2f}), performing extended risk analysis...", extra={'trace_id': trace_id, 'order_id': request_data.order_id})
+            logger.info(f"[assess_risk] High-value order detected (${position_value:.2f}), performing extended risk analysis...", extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'function': 'assess_risk'})
             await asyncio.sleep(6)  # Takes too long, will timeout
         
         # PnL integrity check - detect if PnL calculation seems wrong
@@ -239,9 +240,10 @@ async def assess_risk(request_data: RiskAssessmentRequest, request: Request):
         if request_data.order_type == "SELL" and request_data.pnl < 0:
             loss_percentage = abs(request_data.pnl) / position_value * 100
             if loss_percentage > 15:
-                logger.error(f"Detected upstream calculation error - SELL order showing {loss_percentage:.1f}% loss", extra={
+                logger.error(f"[assess_risk] Detected upstream calculation error - SELL order showing {loss_percentage:.1f}% loss", extra={
                     'trace_id': trace_id,
                     'order_id': request_data.order_id,
+                    'function': 'assess_risk',
                     'extra_data': {
                         'detection_service': 'risk_service',
                         'suspected_source': 'pricing_service_pnl_calculation',
@@ -261,9 +263,10 @@ async def assess_risk(request_data: RiskAssessmentRequest, request: Request):
                 )
         
         if pnl_ratio > 0.15:  # PnL shouldn't exceed 15% of position value in normal cases
-            logger.error(f"PnL integrity check failed - PnL (${request_data.pnl}) is {pnl_ratio*100:.1f}% of position value (${position_value})", extra={
+            logger.error(f"[assess_risk] PnL integrity check failed - PnL (${request_data.pnl}) is {pnl_ratio*100:.1f}% of position value (${position_value})", extra={
                 'trace_id': trace_id,
                 'order_id': request_data.order_id,
+                'function': 'assess_risk',
                 'extra_data': {
                     'pnl': request_data.pnl,
                     'position_value': position_value,
@@ -285,26 +288,26 @@ async def assess_risk(request_data: RiskAssessmentRequest, request: Request):
             request_data.order_type
         )
         
-        logger.info(f"Risk factors breakdown:", extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'extra_data': risk_factors})
-        logger.info(f"  - Position size risk: {risk_factors.get('position_size_risk')} points (Position value: ${risk_factors.get('position_value'):.2f})", extra={'trace_id': trace_id, 'order_id': request_data.order_id})
-        logger.info(f"  - PnL risk: {risk_factors.get('pnl_risk')} points (Estimated PnL: ${risk_factors.get('estimated_pnl'):.2f})", extra={'trace_id': trace_id, 'order_id': request_data.order_id})
-        logger.info(f"  - Quantity risk: {risk_factors.get('quantity_risk')} points (Quantity: {risk_factors.get('quantity')})", extra={'trace_id': trace_id, 'order_id': request_data.order_id})
-        logger.info(f"  - Volatility risk: {risk_factors.get('volatility_risk')} points (Symbol: {risk_factors.get('symbol')})", extra={'trace_id': trace_id, 'order_id': request_data.order_id})
-        logger.info(f"Total risk score calculated: {risk_score:.1f}/100", extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'extra_data': {'risk_score': risk_score}})
+        logger.info(f"[calculate_risk_score] Risk factors breakdown:", extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'function': 'calculate_risk_score', 'extra_data': risk_factors})
+        logger.info(f"[calculate_risk_score]   - Position size risk: {risk_factors.get('position_size_risk')} points (Position value: ${risk_factors.get('position_value'):.2f})", extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'function': 'calculate_risk_score'})
+        logger.info(f"[calculate_risk_score]   - PnL risk: {risk_factors.get('pnl_risk')} points (Estimated PnL: ${risk_factors.get('estimated_pnl'):.2f})", extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'function': 'calculate_risk_score'})
+        logger.info(f"[calculate_risk_score]   - Quantity risk: {risk_factors.get('quantity_risk')} points (Quantity: {risk_factors.get('quantity')})", extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'function': 'calculate_risk_score'})
+        logger.info(f"[calculate_risk_score]   - Volatility risk: {risk_factors.get('volatility_risk')} points (Symbol: {risk_factors.get('symbol')})", extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'function': 'calculate_risk_score'})
+        logger.info(f"[calculate_risk_score] Total risk score calculated: {risk_score:.1f}/100", extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'function': 'calculate_risk_score', 'extra_data': {'risk_score': risk_score}})
         
         # Determine risk level
         risk_level = determine_risk_level(risk_score)
-        logger.info(f"Risk level determined: {risk_level.value}", extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'extra_data': {'risk_level': risk_level.value}})
+        logger.info(f"[determine_risk_level] Risk level determined: {risk_level.value}", extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'function': 'determine_risk_level', 'extra_data': {'risk_level': risk_level.value}})
         
         # Determine approval
         # HIGH risk trades are rejected, others are approved
         approved = risk_level != RiskLevel.HIGH
-        logger.info(f"Approval decision: {'APPROVED' if approved else 'REJECTED'} (Risk level: {risk_level.value})", 
-                   extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'extra_data': {'approved': approved, 'risk_level': risk_level.value}})
+        logger.info(f"[assess_risk] Approval decision: {'APPROVED' if approved else 'REJECTED'} (Risk level: {risk_level.value})", 
+                   extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'function': 'assess_risk', 'extra_data': {'approved': approved, 'risk_level': risk_level.value}})
         
         # Get recommendation
         recommendation = get_recommendation(risk_level, risk_score)
-        logger.info(f"Risk recommendation: {recommendation}", extra={'trace_id': trace_id, 'order_id': request_data.order_id})
+        logger.info(f"[get_recommendation] Risk recommendation: {recommendation}", extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'function': 'get_recommendation'})
         
         timestamp = datetime.now().isoformat()
         
@@ -319,9 +322,10 @@ async def assess_risk(request_data: RiskAssessmentRequest, request: Request):
             "timestamp": timestamp
         }
         
-        logger.info("========== RISK ASSESSMENT COMPLETED ==========", extra={
+        logger.info("[assess_risk] Risk assessment completed", extra={
             "trace_id": trace_id,
             "order_id": request_data.order_id,
+            "function": "assess_risk",
             'extra_data': {
                 'risk_level': risk_level.value,
                 'risk_score': risk_score,
@@ -341,9 +345,10 @@ async def assess_risk(request_data: RiskAssessmentRequest, request: Request):
         )
         
     except Exception as e:
-        logger.error("Unexpected error in risk assessment", extra={
+        logger.error("[assess_risk] Unexpected error in risk assessment", extra={
             "trace_id": trace_id,
             "order_id": request_data.order_id,
+            "function": "assess_risk",
             "error": str(e)
         })
         raise HTTPException(status_code=500, detail=f"Risk assessment failed: {str(e)}")
@@ -354,16 +359,18 @@ async def get_risk_assessment(order_id: str, request: Request):
     """Get risk assessment for a specific order"""
     trace_id = get_trace_id(request.headers.get("X-Trace-Id"))
     
-    logger.info("Fetching risk assessment", extra={
+    logger.info("[get_risk_assessment] Fetching risk assessment", extra={
         "trace_id": trace_id,
-        "order_id": order_id
+        "order_id": order_id,
+        "function": "get_risk_assessment"
     })
     
     assessment = risk_assessments.get(order_id)
     if not assessment:
-        logger.warning("Risk assessment not found", extra={
+        logger.warning("[get_risk_assessment] Risk assessment not found", extra={
             "trace_id": trace_id,
-            "order_id": order_id
+            "order_id": order_id,
+            "function": "get_risk_assessment"
         })
         raise HTTPException(status_code=404, detail="Risk assessment not found")
     
@@ -375,9 +382,10 @@ async def list_risk_assessments(request: Request):
     """List all risk assessments"""
     trace_id = get_trace_id(request.headers.get("X-Trace-Id"))
     
-    logger.info("Listing all risk assessments", extra={
+    logger.info("[list_risk_assessments] Listing all risk assessments", extra={
         "trace_id": trace_id,
-        "count": len(risk_assessments)
+        "count": len(risk_assessments),
+        "function": "list_risk_assessments"
     })
     
     return {

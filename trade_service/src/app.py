@@ -157,10 +157,11 @@ async def validate_trade(trade: TradeValidationRequest, request: Request):
     # Create trace-specific log file
     get_trace_logger(trace_id)
     
-    logger.info("========== TRADE VALIDATION REQUEST RECEIVED ==========", extra={'trace_id': trace_id, 'order_id': trade.order_id})
-    logger.info(f"Validating trade - Symbol: {trade.symbol}, Quantity: {trade.quantity}, Type: {trade.order_type}", extra={
+    logger.info("[validate_trade] Trade validation request received", extra={'trace_id': trace_id, 'order_id': trade.order_id, 'function': 'validate_trade'})
+    logger.info(f"[validate_trade] Validating - Symbol: {trade.symbol}, Quantity: {trade.quantity}, Type: {trade.order_type}", extra={
         "trace_id": trace_id,
         "order_id": trade.order_id,
+        "function": "validate_trade",
         "symbol": trade.symbol,
         "quantity": trade.quantity,
         "order_type": trade.order_type
@@ -169,14 +170,15 @@ async def validate_trade(trade: TradeValidationRequest, request: Request):
     timestamp = datetime.now().isoformat()
     
     # Check market hours
-    logger.info("Checking market hours...", extra={'trace_id': trace_id, 'order_id': trade.order_id})
+    logger.info("[validate_trade] is_market_open checking...", extra={'trace_id': trace_id, 'order_id': trade.order_id, 'function': 'is_market_open'})
     market_open = is_market_open()
-    logger.info(f"Market status: {'OPEN' if market_open else 'CLOSED'}", extra={'trace_id': trace_id, 'order_id': trade.order_id, 'extra_data': {'market_open': market_open}})
+    logger.info(f"[is_market_open] Market status: {'OPEN' if market_open else 'CLOSED'}", extra={'trace_id': trace_id, 'order_id': trade.order_id, 'function': 'is_market_open', 'extra_data': {'market_open': market_open}})
     
     if not market_open:
-        logger.warning("VALIDATION FAILED - Market is currently closed", extra={
+        logger.warning("[validate_trade] VALIDATION FAILED - Market is currently closed", extra={
             "trace_id": trace_id,
             "order_id": trade.order_id,
+            "function": "validate_trade",
             'extra_data': {'reason': 'market_closed', 'trading_hours': '9:00 AM - 4:00 PM'}
         })
         return TradeValidationResponse(
@@ -188,16 +190,17 @@ async def validate_trade(trade: TradeValidationRequest, request: Request):
         )
         
     # Validate quantity
-    logger.info(f"Validating quantity: {trade.quantity}", extra={'trace_id': trace_id, 'order_id': trade.order_id})
+    logger.info(f"[validate_trade] validate_quantity processing: {trade.quantity}", extra={'trace_id': trace_id, 'order_id': trade.order_id, 'function': 'validate_quantity'})
     normalized_qty = validate_quantity(trade.quantity)
     
     if normalized_qty != trade.quantity:
-        logger.info(f"Quantity normalized from {trade.quantity} to {normalized_qty}", extra={'trace_id': trace_id, 'order_id': trade.order_id, 'extra_data': {'original': trade.quantity, 'normalized': normalized_qty}})
+        logger.info(f"[validate_quantity] Normalized from {trade.quantity} to {normalized_qty}", extra={'trace_id': trace_id, 'order_id': trade.order_id, 'function': 'validate_quantity', 'extra_data': {'original': trade.quantity, 'normalized': normalized_qty}})
     
     if normalized_qty == -1:
-        logger.warning(f"VALIDATION FAILED - Quantity {trade.quantity} exceeds maximum limit", extra={
+        logger.warning(f"[validate_trade] VALIDATION FAILED - Quantity {trade.quantity} exceeds maximum limit", extra={
             "trace_id": trace_id,
             "order_id": trade.order_id,
+            "function": "validate_trade",
             "quantity": trade.quantity,
             'extra_data': {'reason': 'quantity_exceeds_maximum', 'max_allowed': 10000}
         })
@@ -211,12 +214,13 @@ async def validate_trade(trade: TradeValidationRequest, request: Request):
     
     # Update trade with normalized quantity
     trade.quantity = normalized_qty
-    logger.info(f"Quantity validation passed: {normalized_qty}", 
-               extra={'trace_id': trace_id, 'order_id': trade.order_id})
+    logger.info(f"[validate_trade] Quantity validation passed: {normalized_qty}", 
+               extra={'trace_id': trace_id, 'order_id': trade.order_id, 'function': 'validate_trade'})
     
-    logger.info("========== TRADE VALIDATION SUCCESSFUL ==========", extra={
+    logger.info("[validate_trade] Trade validation successful", extra={
         "trace_id": trace_id,
         "order_id": trade.order_id,
+        "function": "validate_trade",
         'extra_data': {'symbol': trade.symbol, 'quantity': trade.quantity, 'order_type': trade.order_type.value}
     })
     
@@ -239,10 +243,11 @@ async def execute_trade(trade: TradeExecutionRequest, request: Request):
     # Create trace-specific log file
     get_trace_logger(trace_id)
     
-    logger.info("========== TRADE EXECUTION REQUEST RECEIVED ==========", extra={'trace_id': trace_id, 'order_id': trade.order_id})
-    logger.info(f"Executing trade - Symbol: {trade.symbol}, Quantity: {trade.quantity}, Price: ${trade.price}, Type: {trade.order_type}", extra={
+    logger.info("[execute_trade] Trade execution request received", extra={'trace_id': trace_id, 'order_id': trade.order_id, 'function': 'execute_trade'})
+    logger.info(f"[execute_trade] Executing - Symbol: {trade.symbol}, Quantity: {trade.quantity}, Price: ${trade.price}, Type: {trade.order_type}", extra={
         "trace_id": trace_id,
         "order_id": trade.order_id,
+        "function": "execute_trade",
         "symbol": trade.symbol,
         "quantity": trade.quantity,
         "price": trade.price
@@ -251,7 +256,7 @@ async def execute_trade(trade: TradeExecutionRequest, request: Request):
     execution_time = datetime.now().isoformat()
     
     # Store trade in database
-    logger.info("Storing trade in database...", extra={'trace_id': trace_id, 'order_id': trade.order_id})
+    logger.info("[execute_trade] Storing trade in database...", extra={'trace_id': trace_id, 'order_id': trade.order_id, 'function': 'execute_trade'})
     trades_db[trade.order_id] = {
         "order_id": trade.order_id,
         "symbol": trade.symbol,
@@ -262,9 +267,10 @@ async def execute_trade(trade: TradeExecutionRequest, request: Request):
         "execution_time": execution_time
     }
     
-    logger.info("========== TRADE EXECUTED SUCCESSFULLY ==========", extra={
+    logger.info("[execute_trade] Trade executed successfully", extra={
         "trace_id": trace_id,
         "order_id": trade.order_id,
+        "function": "execute_trade",
         'extra_data': {
             "status": "EXECUTED",
             "execution_time": execution_time,
@@ -290,16 +296,18 @@ async def get_trade(order_id: str, request: Request):
     """Get trade details by order ID"""
     trace_id = get_trace_id(request.headers.get("X-Trace-Id"))
     
-    logger.info("Fetching trade details", extra={
+    logger.info("[get_trade] Fetching trade details", extra={
         "trace_id": trace_id,
-        "order_id": order_id
+        "order_id": order_id,
+        "function": "get_trade"
     })
     
     trade = trades_db.get(order_id)
     if not trade:
-        logger.warning("Trade not found", extra={
+        logger.warning("[get_trade] Trade not found", extra={
             "trace_id": trace_id,
-            "order_id": order_id
+            "order_id": order_id,
+            "function": "get_trade"
         })
         raise HTTPException(status_code=404, detail="Trade not found")
     
@@ -311,9 +319,10 @@ async def list_trades(request: Request):
     """List all trades"""
     trace_id = get_trace_id(request.headers.get("X-Trace-Id"))
     
-    logger.info("Listing all trades", extra={
+    logger.info("[list_trades] Listing all trades", extra={
         "trace_id": trace_id,
-        "count": len(trades_db)
+        "count": len(trades_db),
+        "function": "list_trades"
     })
     
     return {"trades": list(trades_db.values()), "count": len(trades_db)}

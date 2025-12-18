@@ -114,7 +114,7 @@ async def call_service(url: str, method: str, trace_id: str, json_data: dict = N
             response.raise_for_status()
             return response.json()
     except httpx.TimeoutException as e:
-        logger.error(f"Timeout calling {url}", extra={'trace_id': trace_id})
+        logger.error(f"[call_service] Timeout calling {url}", extra={'trace_id': trace_id, 'function': 'call_service'})
         raise HTTPException(status_code=504, detail=f"Service timeout: {url}")
     except httpx.HTTPStatusError as e:
         # Extract detailed error message from service response
@@ -122,11 +122,11 @@ async def call_service(url: str, method: str, trace_id: str, json_data: dict = N
             error_detail = e.response.json().get('detail', f"Service error: {url}")
         except:
             error_detail = f"Service error: {url}"
-        logger.error(f"HTTP error calling {url} - status {e.response.status_code}: {error_detail}", 
-                    extra={'trace_id': trace_id, 'extra_data': {'status_code': e.response.status_code, 'error_detail': error_detail}})
+        logger.error(f"[call_service] HTTP error calling {url} - status {e.response.status_code}: {error_detail}", 
+                    extra={'trace_id': trace_id, 'function': 'call_service', 'extra_data': {'status_code': e.response.status_code, 'error_detail': error_detail}})
         raise HTTPException(status_code=e.response.status_code, detail=error_detail)
     except Exception as e:
-        logger.error(f"Error calling {url} - {str(e)}", extra={'trace_id': trace_id})
+        logger.error(f"[call_service] Error calling {url} - {str(e)}", extra={'trace_id': trace_id, 'function': 'call_service'})
         raise HTTPException(status_code=500, detail=f"Service call failed: {url}")
 
 
@@ -160,9 +160,9 @@ async def place_order(order: OrderRequest, request: Request):
     # Create trace-specific log file
     get_trace_logger(trace_id)
     
-    logger.info(f"========== ORDER PLACEMENT INITIATED ==========", extra={'trace_id': trace_id, 'order_id': order_id})
-    logger.info(f"Order Details - Symbol: {order.symbol}, Quantity: {order.quantity}, Type: {order.order_type}", 
-                extra={'trace_id': trace_id, 'order_id': order_id, 'extra_data': {'symbol': order.symbol, 'quantity': order.quantity, 'order_type': order.order_type.value}})
+    logger.info(f"[place_order] Order placement initiated", extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order'})
+    logger.info(f"[place_order] Order Details - Symbol: {order.symbol}, Quantity: {order.quantity}, Type: {order.order_type}", 
+                extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order', 'extra_data': {'symbol': order.symbol, 'quantity': order.quantity, 'order_type': order.order_type.value}})
     
     # Store partial results for detailed error reporting
     trade_result = None
@@ -171,15 +171,15 @@ async def place_order(order: OrderRequest, request: Request):
     
     try:
         # Step 1: Validate trade with Trade Service
-        logger.info("STEP 1: Starting trade validation with Trade Service", extra={'trace_id': trace_id, 'order_id': order_id})
+        logger.info("[place_order] STEP 1: Starting trade validation with Trade Service", extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order'})
         trade_data = {
             "order_id": order_id,
             "symbol": order.symbol,
             "quantity": order.quantity,
             "order_type": order.order_type.value
         }
-        logger.info(f"Sending validation request to {TRADE_SERVICE_URL}/trades/validate", 
-                   extra={'trace_id': trace_id, 'order_id': order_id, 'extra_data': trade_data})
+        logger.info(f"[place_order] Sending validation request to {TRADE_SERVICE_URL}/trades/validate", 
+                   extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order', 'extra_data': trade_data})
         trade_result = await call_service(
             f"{TRADE_SERVICE_URL}/trades/validate",
             "POST",
@@ -187,12 +187,12 @@ async def place_order(order: OrderRequest, request: Request):
             trade_data
         )
         
-        logger.info(f"Trade Service response received - Valid: {trade_result.get('valid')}", 
-                   extra={'trace_id': trace_id, 'order_id': order_id, 'extra_data': trade_result})
+        logger.info(f"[place_order] validate_trade response - Valid: {trade_result.get('valid')}", 
+                   extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order', 'extra_data': trade_result})
         
         if not trade_result.get("valid"):
-            logger.warning(f"VALIDATION FAILED - Reason: {trade_result.get('reason')}", 
-                         extra={'trace_id': trace_id, 'order_id': order_id, 'extra_data': {'reason': trade_result.get('reason')}})
+            logger.warning(f"[place_order] VALIDATION FAILED - Reason: {trade_result.get('reason')}", 
+                         extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order', 'extra_data': {'reason': trade_result.get('reason')}})
             return OrderResponse(
                 order_id=order_id,
                 status="REJECTED",
@@ -204,19 +204,19 @@ async def place_order(order: OrderRequest, request: Request):
         # Use normalized quantity from validation
         actual_quantity = trade_result.get("normalized_quantity", order.quantity)
         if actual_quantity != order.quantity:
-            logger.info(f"Using normalized quantity: {actual_quantity} (original: {order.quantity})", 
-                       extra={'trace_id': trace_id, 'order_id': order_id, 'extra_data': {'original': order.quantity, 'normalized': actual_quantity}})
+            logger.info(f"[place_order] Using normalized quantity: {actual_quantity} (original: {order.quantity})", 
+                       extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order', 'extra_data': {'original': order.quantity, 'normalized': actual_quantity}})
         
         # Step 2: Get pricing and PnL from Pricing-PnL Service
-        logger.info("STEP 2: Starting pricing and PnL calculation with Pricing-PnL Service", extra={'trace_id': trace_id, 'order_id': order_id})
+        logger.info("[place_order] STEP 2: Starting pricing and PnL calculation with Pricing-PnL Service", extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order'})
         pricing_data = {
             "order_id": order_id,
             "symbol": order.symbol,
             "quantity": actual_quantity,
             "order_type": order.order_type.value
         }
-        logger.info(f"Sending pricing request to {PRICING_PNL_SERVICE_URL}/pricing/calculate", 
-                   extra={'trace_id': trace_id, 'order_id': order_id, 'extra_data': pricing_data})
+        logger.info(f"[place_order] Sending pricing request to {PRICING_PNL_SERVICE_URL}/pricing/calculate", 
+                   extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order', 'extra_data': pricing_data})
         
         pricing_result = await call_service(
             f"{PRICING_PNL_SERVICE_URL}/pricing/calculate",
@@ -225,11 +225,11 @@ async def place_order(order: OrderRequest, request: Request):
             pricing_data
         )
         
-        logger.info(f"Pricing Service response - Price: ${pricing_result.get('price')}, Total Cost: ${pricing_result.get('total_cost')}, Est. PnL: ${pricing_result.get('estimated_pnl')}", 
-                   extra={'trace_id': trace_id, 'order_id': order_id, 'extra_data': pricing_result})
+        logger.info(f"[place_order] calculate_pnl response - Price: ${pricing_result.get('price')}, Total Cost: ${pricing_result.get('total_cost')}, Est. PnL: ${pricing_result.get('estimated_pnl')}", 
+                   extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order', 'extra_data': pricing_result})
         
         # Step 3: Assess risk with Risk Service
-        logger.info("STEP 3: Starting risk assessment with Risk Service", extra={'trace_id': trace_id, 'order_id': order_id})
+        logger.info("[place_order] STEP 3: Starting risk assessment with Risk Service", extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order'})
         risk_data = {
             "order_id": order_id,
             "symbol": order.symbol,
@@ -238,8 +238,8 @@ async def place_order(order: OrderRequest, request: Request):
             "pnl": pricing_result.get("estimated_pnl"),
             "order_type": order.order_type.value
         }
-        logger.info(f"Sending risk assessment request to {RISK_SERVICE_URL}/risk/assess", 
-                   extra={'trace_id': trace_id, 'order_id': order_id, 'extra_data': risk_data})
+        logger.info(f"[place_order] Sending risk assessment request to {RISK_SERVICE_URL}/risk/assess", 
+                   extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order', 'extra_data': risk_data})
         
         try:
             risk_result = await asyncio.wait_for(
@@ -252,8 +252,8 @@ async def place_order(order: OrderRequest, request: Request):
                 timeout=5.0
             )
         except asyncio.TimeoutError:
-            logger.error("Risk service timeout - request exceeded 5 second limit", 
-                        extra={'trace_id': trace_id, 'order_id': order_id, 'extra_data': {'service': 'risk_service', 'timeout_seconds': 5}})
+            logger.error("[place_order] Risk service timeout - request exceeded 5 second limit", 
+                        extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order', 'extra_data': {'service': 'risk_service', 'timeout_seconds': 5}})
             return OrderResponse(
                 order_id=order_id,
                 status="FAILED",
@@ -270,15 +270,15 @@ async def place_order(order: OrderRequest, request: Request):
                 }
             )
         
-        logger.info(f"Risk Service response - Level: {risk_result.get('risk_level')}, Score: {risk_result.get('risk_score')}, Approved: {risk_result.get('approved')}", 
-                   extra={'trace_id': trace_id, 'order_id': order_id, 'extra_data': risk_result})
-        logger.info(f"Risk Recommendation: {risk_result.get('recommendation')}", 
-                   extra={'trace_id': trace_id, 'order_id': order_id})
+        logger.info(f"[place_order] Risk Service response - Level: {risk_result.get('risk_level')}, Score: {risk_result.get('risk_score')}, Approved: {risk_result.get('approved')}", 
+                   extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order', 'extra_data': risk_result})
+        logger.info(f"[place_order] Risk Recommendation: {risk_result.get('recommendation')}", 
+                   extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order'})
         
         # Check if risk is acceptable
         if risk_result.get("risk_level") == "HIGH" and risk_result.get("approved") is False:
-            logger.warning("ORDER REJECTED - High risk assessment failed approval", 
-                         extra={'trace_id': trace_id, 'order_id': order_id, 'extra_data': {'risk_level': 'HIGH', 'risk_score': risk_result.get('risk_score')}})
+            logger.warning("[place_order] ORDER REJECTED - High risk assessment failed approval", 
+                         extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order', 'extra_data': {'risk_level': 'HIGH', 'risk_score': risk_result.get('risk_score')}})
             return OrderResponse(
                 order_id=order_id,
                 status="REJECTED",
@@ -292,7 +292,7 @@ async def place_order(order: OrderRequest, request: Request):
             )
         
         # Step 4: Execute the trade
-        logger.info("STEP 4: Proceeding with trade execution at Trade Service", extra={'trace_id': trace_id, 'order_id': order_id})
+        logger.info("[place_order] STEP 4: Proceeding with trade execution at Trade Service", extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order'})
         execution_data = {
             "order_id": order_id,
             "symbol": order.symbol,
@@ -300,8 +300,8 @@ async def place_order(order: OrderRequest, request: Request):
             "price": pricing_result.get("price"),
             "order_type": order.order_type.value
         }
-        logger.info(f"Sending execution request to {TRADE_SERVICE_URL}/trades/execute", 
-                   extra={'trace_id': trace_id, 'order_id': order_id, 'extra_data': execution_data})
+        logger.info(f"[place_order] Sending execution request to {TRADE_SERVICE_URL}/trades/execute", 
+                   extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order', 'extra_data': execution_data})
         
         execution_result = await call_service(
             f"{TRADE_SERVICE_URL}/trades/execute",
@@ -310,11 +310,12 @@ async def place_order(order: OrderRequest, request: Request):
             execution_data
         )
         
-        logger.info(f"Trade execution completed - Status: {execution_result.get('status')}, Time: {execution_result.get('execution_time')}", 
-                   extra={'trace_id': trace_id, 'order_id': order_id, 'extra_data': execution_result})
-        logger.info("========== ORDER EXECUTED SUCCESSFULLY ==========", extra={
+        logger.info(f"[place_order] Trade execution completed - Status: {execution_result.get('status')}, Time: {execution_result.get('execution_time')}", 
+                   extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order', 'extra_data': execution_result})
+        logger.info("[place_order] Order executed successfully", extra={
             'trace_id': trace_id,
             'order_id': order_id,
+            'function': 'place_order',
             'extra_data': {
                 'final_status': 'EXECUTED',
                 'symbol': order.symbol,
@@ -340,7 +341,7 @@ async def place_order(order: OrderRequest, request: Request):
         )
         
     except HTTPException as e:
-        logger.error(f"Order placement failed - {str(e.detail)}", extra={'trace_id': trace_id, 'order_id': order_id})
+        logger.error(f"[place_order] Order placement failed - {str(e.detail)}", extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order'})
         
         # Build error response with partial results
         error_details = {}
@@ -365,7 +366,7 @@ async def place_order(order: OrderRequest, request: Request):
             details=error_details
         )
     except Exception as e:
-        logger.error(f"Order placement failed - {str(e)}", extra={'trace_id': trace_id, 'order_id': order_id})
+        logger.error(f"[place_order] Order placement failed - {str(e)}", extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order'})
         raise HTTPException(status_code=500, detail=f"Order placement failed: {str(e)}")
 
 
@@ -377,7 +378,7 @@ async def get_order_status(order_id: str, request: Request):
     """Get the status of a specific order"""
     trace_id = get_trace_id(request.headers.get("X-Trace-Id"))
     
-    logger.info("Fetching order status", extra={'trace_id': trace_id, 'order_id': order_id})
+    logger.info("[get_order_status] Fetching order status", extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'get_order_status'})
     
     try:
         # Query all services for order information
