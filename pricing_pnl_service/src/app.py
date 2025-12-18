@@ -299,7 +299,7 @@ async def calculate_pricing(request_data: PricingRequest, request: Request):
 
 
 @app.get("/pricing/{order_id}")
-async def get_pricing(order_id: str, request: Request):
+def get_pricing(order_id: str, request: Request):
     """Get pricing data for a specific order"""
     trace_id = get_trace_id(request.headers.get("X-Trace-Id"))
     
@@ -322,7 +322,7 @@ async def get_pricing(order_id: str, request: Request):
 
 
 @app.get("/pricing/symbol/{symbol}")
-async def get_current_price(symbol: str, request: Request):
+def get_current_price(symbol: str, request: Request):
     """Get current market price for a symbol"""
     trace_id = get_trace_id(request.headers.get("X-Trace-Id"))
     
@@ -350,7 +350,7 @@ async def get_current_price(symbol: str, request: Request):
 
 
 @app.get("/pnl/{order_id}")
-async def get_pnl(order_id: str, request: Request):
+def get_pnl(order_id: str, request: Request):
     """Get PnL data for a specific order"""
     trace_id = get_trace_id(request.headers.get("X-Trace-Id"))
     

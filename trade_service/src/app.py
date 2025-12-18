@@ -292,7 +292,7 @@ async def execute_trade(trade: TradeExecutionRequest, request: Request):
 
 
 @app.get("/trades/{order_id}")
-async def get_trade(order_id: str, request: Request):
+def get_trade(order_id: str, request: Request):
     """Get trade details by order ID"""
     trace_id = get_trace_id(request.headers.get("X-Trace-Id"))
     
@@ -315,7 +315,7 @@ async def get_trade(order_id: str, request: Request):
 
 
 @app.get("/trades")
-async def list_trades(request: Request):
+def list_trades(request: Request):
     """List all trades"""
     trace_id = get_trace_id(request.headers.get("X-Trace-Id"))
     

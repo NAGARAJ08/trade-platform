@@ -1,14 +1,13 @@
 import logging
 import json
 import uuid
-import asyncio
 from datetime import datetime, time
 from typing import Optional, Dict, Any
 from enum import Enum
 
 from fastapi import FastAPI, HTTPException, Header, Request
 from pydantic import BaseModel, Field
-import httpx
+import requests
 import uvicorn
 
 # Custom JSON formatter for Splunk-style logs
@@ -99,24 +98,23 @@ def is_market_open(current_time: datetime) -> bool:
     return market_open <= current <= market_close
 
 
-async def call_service(url: str, method: str, trace_id: str, json_data: dict = None, timeout: float = 5.0):
+def call_service(url: str, method: str, trace_id: str, json_data: dict = None, timeout: float = 5.0):
     """Helper function to call microservices"""
     headers = {"X-Trace-Id": trace_id}
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            if method == "POST":
-                response = await client.post(url, json=json_data, headers=headers)
-            elif method == "GET":
-                response = await client.get(url, headers=headers)
-            else:
-                raise ValueError(f"Unsupported method: {method}")
-            
-            response.raise_for_status()
-            return response.json()
-    except httpx.TimeoutException as e:
+        if method == "POST":
+            response = requests.post(url, json=json_data, headers=headers, timeout=timeout)
+        elif method == "GET":
+            response = requests.get(url, headers=headers, timeout=timeout)
+        else:
+            raise ValueError(f"Unsupported method: {method}")
+        
+        response.raise_for_status()
+        return response.json()
+    except requests.Timeout as e:
         logger.error(f"[call_service] Timeout calling {url}", extra={'trace_id': trace_id, 'function': 'call_service'})
         raise HTTPException(status_code=504, detail=f"Service timeout: {url}")
-    except httpx.HTTPStatusError as e:
+    except requests.HTTPError as e:
         # Extract detailed error message from service response
         try:
             error_detail = e.response.json().get('detail', f"Service error: {url}")
@@ -143,7 +141,7 @@ def health_check():
 
 
 @app.post("/orders", response_model=OrderResponse)
-async def place_order(order: OrderRequest, request: Request):
+def place_order(order: OrderRequest, request: Request):
     """
     Place a new order - orchestrates the entire trade flow
     
@@ -180,7 +178,7 @@ async def place_order(order: OrderRequest, request: Request):
         }
         logger.info(f"[place_order] Sending validation request to {TRADE_SERVICE_URL}/trades/validate", 
                    extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order', 'extra_data': trade_data})
-        trade_result = await call_service(
+        trade_result = call_service(
             f"{TRADE_SERVICE_URL}/trades/validate",
             "POST",
             trace_id,
@@ -218,7 +216,7 @@ async def place_order(order: OrderRequest, request: Request):
         logger.info(f"[place_order] Sending pricing request to {PRICING_PNL_SERVICE_URL}/pricing/calculate", 
                    extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order', 'extra_data': pricing_data})
         
-        pricing_result = await call_service(
+        pricing_result = call_service(
             f"{PRICING_PNL_SERVICE_URL}/pricing/calculate",
             "POST",
             trace_id,
@@ -242,33 +240,33 @@ async def place_order(order: OrderRequest, request: Request):
                    extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order', 'extra_data': risk_data})
         
         try:
-            risk_result = await asyncio.wait_for(
-                call_service(
-                    f"{RISK_SERVICE_URL}/risk/assess",
-                    "POST",
-                    trace_id,
-                    risk_data
-                ),
+            risk_result = call_service(
+                f"{RISK_SERVICE_URL}/risk/assess",
+                "POST",
+                trace_id,
+                risk_data,
                 timeout=5.0
             )
-        except asyncio.TimeoutError:
-            logger.error("[place_order] Risk service timeout - request exceeded 5 second limit", 
-                        extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order', 'extra_data': {'service': 'risk_service', 'timeout_seconds': 5}})
-            return OrderResponse(
-                order_id=order_id,
-                status="FAILED",
-                message="Risk assessment service timeout",
-                trace_id=trace_id,
-                details={
-                    "validation": trade_result,
-                    "pricing": pricing_result,
-                    "risk": {
-                        "error": "timeout",
-                        "message": "Risk service did not respond within timeout period (5 seconds)",
-                        "attempted_at": datetime.now().isoformat()
+        except HTTPException as timeout_ex:
+            if timeout_ex.status_code == 504:
+                logger.error("[place_order] Risk service timeout - request exceeded 5 second limit", 
+                            extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order', 'extra_data': {'service': 'risk_service', 'timeout_seconds': 5}})
+                return OrderResponse(
+                    order_id=order_id,
+                    status="FAILED",
+                    message="Risk assessment service timeout",
+                    trace_id=trace_id,
+                    details={
+                        "validation": trade_result,
+                        "pricing": pricing_result,
+                        "risk": {
+                            "error": "timeout",
+                            "message": "Risk service did not respond within timeout period (5 seconds)",
+                            "attempted_at": datetime.now().isoformat()
+                        }
                     }
-                }
-            )
+                )
+            raise
         
         logger.info(f"[place_order] Risk Service response - Level: {risk_result.get('risk_level')}, Score: {risk_result.get('risk_score')}, Approved: {risk_result.get('approved')}", 
                    extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order', 'extra_data': risk_result})
@@ -303,7 +301,7 @@ async def place_order(order: OrderRequest, request: Request):
         logger.info(f"[place_order] Sending execution request to {TRADE_SERVICE_URL}/trades/execute", 
                    extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order', 'extra_data': execution_data})
         
-        execution_result = await call_service(
+        execution_result = call_service(
             f"{TRADE_SERVICE_URL}/trades/execute",
             "POST",
             trace_id,
@@ -374,7 +372,7 @@ async def place_order(order: OrderRequest, request: Request):
 
 
 @app.get("/orders/{order_id}")
-async def get_order_status(order_id: str, request: Request):
+def get_order_status(order_id: str, request: Request):
     """Get the status of a specific order"""
     trace_id = get_trace_id(request.headers.get("X-Trace-Id"))
     
@@ -382,7 +380,7 @@ async def get_order_status(order_id: str, request: Request):
     
     try:
         # Query all services for order information
-        trade_info = await call_service(f"{TRADE_SERVICE_URL}/trades/{order_id}", "GET", trace_id)
+        trade_info = call_service(f"{TRADE_SERVICE_URL}/trades/{order_id}", "GET", trace_id)
         
         return {
             "order_id": order_id,

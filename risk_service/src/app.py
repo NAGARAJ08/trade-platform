@@ -1,7 +1,7 @@
 import logging
 import json
 import uuid
-import asyncio
+import time
 from datetime import datetime
 from typing import Optional, Dict, Any
 from enum import Enum
@@ -231,7 +231,7 @@ async def assess_risk(request_data: RiskAssessmentRequest, request: Request):
         position_value = abs(request_data.quantity * request_data.price)
         if position_value > 500000:
             logger.info(f"[assess_risk] High-value order detected (${position_value:.2f}), performing extended risk analysis...", extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'function': 'assess_risk'})
-            await asyncio.sleep(6)  # Takes too long, will timeout
+            time.sleep(6)  # Takes too long, will timeout
         
         # PnL integrity check - detect if PnL calculation seems wrong
         pnl_ratio = abs(request_data.pnl) / position_value if position_value > 0 else 0
@@ -355,7 +355,7 @@ async def assess_risk(request_data: RiskAssessmentRequest, request: Request):
 
 
 @app.get("/risk/{order_id}")
-async def get_risk_assessment(order_id: str, request: Request):
+def get_risk_assessment(order_id: str, request: Request):
     """Get risk assessment for a specific order"""
     trace_id = get_trace_id(request.headers.get("X-Trace-Id"))
     
