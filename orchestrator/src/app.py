@@ -96,18 +96,6 @@ def get_trace_logger(trace_id: str):
         logger.addHandler(trace_file_handler)
     return logger
 
-
-def is_market_open(current_time: datetime) -> bool:
-    """
-    Check if market is open (dummy implementation)
-    Market hours: 9:30 AM - 4:00 PM EST (simulated as 9-16 in local time)
-    """
-    market_open = time(9, 30)
-    market_close = time(16, 0)
-    current = current_time.time()
-    return market_open <= current <= market_close
-
-
 def call_service(url: str, method: str, trace_id: str, json_data: dict = None, timeout: float = 5.0):
     """Helper function to call microservices"""
     headers = {"X-Trace-Id": trace_id}
@@ -327,7 +315,7 @@ def place_order(order: OrderRequest, request: Request):
             'extra_data': {
                 'final_status': 'EXECUTED',
                 'symbol': order.symbol,
-                'quantity': order.quantity,
+                'quantity': actual_quantity,
                 'price': pricing_result.get('price'),
                 'total_cost': pricing_result.get('total_cost'),
                 'estimated_pnl': pricing_result.get('estimated_pnl'),
@@ -339,29 +327,87 @@ def place_order(order: OrderRequest, request: Request):
         return OrderResponse(
             order_id=order_id,
             status="EXECUTED",
-            message="Order executed successfully",
+            message=f"Order executed successfully: {order.order_type} {actual_quantity} {order.symbol} @ ${pricing_result.get('price')}",
             trace_id=trace_id,
             details={
-                "execution": execution_result,
-                "pricing": pricing_result,
-                "risk": risk_result
+                "execution_flow": {
+                    "validation": {
+                        "status": "passed",
+                        "normalized_quantity": actual_quantity,
+                        "timestamp": trade_result.get('timestamp')
+                    },
+                    "pricing_calculation": {
+                        "price_per_share": pricing_result.get('price'),
+                        "total_cost": pricing_result.get('total_cost'),
+                        "estimated_pnl": pricing_result.get('estimated_pnl'),
+                        "timestamp": pricing_result.get('timestamp')
+                    },
+                    "risk_assessment": {
+                        "risk_level": risk_result.get('risk_level'),
+                        "risk_score": risk_result.get('risk_score'),
+                        "approved": risk_result.get('approved'),
+                        "risk_factors": risk_result.get('risk_factors'),
+                        "timestamp": risk_result.get('timestamp')
+                    },
+                    "execution": {
+                        "status": execution_result.get('status'),
+                        "execution_time": execution_result.get('execution_time')
+                    }
+                },
+                "summary": {
+                    "symbol": order.symbol,
+                    "order_type": order.order_type.value,
+                    "quantity": actual_quantity,
+                    "price": pricing_result.get('price'),
+                    "total_cost": pricing_result.get('total_cost'),
+                    "estimated_pnl": pricing_result.get('estimated_pnl'),
+                    "risk_level": risk_result.get('risk_level')
+                }
             }
         )
         
     except HTTPException as e:
         logger.error(f"[place_order] Order placement failed - {str(e.detail)}", extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order'})
         
-        # Build error response with partial results
-        error_details = {}
-        if trade_result:
-            error_details["validation"] = trade_result
-        if pricing_result:
-            error_details["pricing"] = pricing_result
-        if risk_result:
-            error_details["risk"] = risk_result
+        # Determine failure stage
+        if not trade_result:
+            failure_stage = "validation"
+        elif not pricing_result:
+            failure_stage = "pricing_calculation"
+        elif not risk_result:
+            failure_stage = "risk_assessment"
+        else:
+            failure_stage = "execution"
         
-        error_details["error"] = {
-            "stage": "pricing" if trade_result and not pricing_result else "risk" if pricing_result and not risk_result else "validation",
+        # Build execution flow showing where it failed
+        execution_flow = {}
+        
+        if trade_result:
+            execution_flow["validation"] = {
+                "status": "passed",
+                "normalized_quantity": trade_result.get('normalized_quantity'),
+                "timestamp": trade_result.get('timestamp')
+            }
+        
+        if pricing_result:
+            execution_flow["pricing_calculation"] = {
+                "price_per_share": pricing_result.get('price'),
+                "total_cost": pricing_result.get('total_cost'),
+                "estimated_pnl": pricing_result.get('estimated_pnl'),
+                "timestamp": pricing_result.get('timestamp')
+            }
+        
+        if risk_result:
+            execution_flow["risk_assessment"] = {
+                "risk_level": risk_result.get('risk_level'),
+                "risk_score": risk_result.get('risk_score'),
+                "approved": risk_result.get('approved'),
+                "timestamp": risk_result.get('timestamp')
+            }
+        
+        # Add failure information
+        execution_flow["failure"] = {
+            "stage": failure_stage,
             "message": str(e.detail),
             "status_code": e.status_code
         }
@@ -369,9 +415,9 @@ def place_order(order: OrderRequest, request: Request):
         return OrderResponse(
             order_id=order_id,
             status="FAILED",
-            message=str(e.detail),
+            message=f"Order failed at {failure_stage.replace('_', ' ')}: {str(e.detail)}",
             trace_id=trace_id,
-            details=error_details
+            details={"execution_flow": execution_flow}
         )
     except Exception as e:
         logger.error(f"[place_order] Order placement failed - {str(e)}", extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order'})

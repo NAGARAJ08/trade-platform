@@ -101,6 +101,11 @@ def get_market_price(symbol: str, scenario: Optional[str] = None) -> float:
     """
     Get current market price for a symbol
     Returns mock prices with some variance
+    
+    BUG: Price variance can cause cross-service inconsistencies!
+    Trade service uses estimated_price=$175 for validation,
+    but this function returns actual market price which varies.
+    This creates a timing/synchronization issue.
     """
     base_prices = {
         "AAPL": 175.50,
@@ -118,7 +123,9 @@ def get_market_price(symbol: str, scenario: Optional[str] = None) -> float:
     
     base_price = base_prices[symbol]
     
-    # Add some variance (±2%)
+    # BUG: Random variance means price is different each call!
+    # Validation at time T1 uses $175, execution at time T2 uses $173
+    # This can cause orders to pass validation but fail execution or vice versa
     variance = random.uniform(-0.02, 0.02)
     price = base_price * (1 + variance)
     
@@ -143,23 +150,150 @@ def get_cost_basis(symbol: str) -> float:
     return cost_basis.get(symbol, 50.0)
 
 
+def calculate_total_cost(quantity: int, price: float, symbol: str, order_type: OrderType, trace_id: str, order_id: str) -> Dict[str, float]:
+    """Calculate total cost/proceeds based on order type including all fees"""
+    logger.info(f"[calculate_total_cost] Calculating cost for {order_type} order", 
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'calculate_total_cost'})
+    
+    if order_type == OrderType.BUY:
+        base_cost = quantity * price
+        commission = base_cost * 0.005  # 0.5%
+        exchange_fee = quantity * 0.01  # $0.01 per share
+        total_cost = base_cost + commission + exchange_fee
+        
+        logger.info(f"[calculate_total_cost] BUY cost breakdown - Base: ${base_cost:.2f}, Commission: ${commission:.2f}, Fees: ${exchange_fee:.2f}, Total: ${total_cost:.2f}", 
+                   extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'calculate_total_cost',
+                          'extra_data': {'base_cost': base_cost, 'commission': commission, 'exchange_fee': exchange_fee, 'total': total_cost}})
+        
+        return {'base_amount': base_cost, 'commission': commission, 'fees': exchange_fee, 'total_cost': total_cost}
+    else:  # SELL
+        gross_proceeds = quantity * price
+        commission = gross_proceeds * 0.005  # 0.5%
+        sec_fee = gross_proceeds * 0.0000207  # SEC fee
+        
+        # Bug: For large SELL orders of certain stocks, extra fee applied incorrectly
+        if quantity > 200 and symbol in ["TSLA", "NVDA"]:
+            logger.warning(f"[calculate_total_cost] Large SELL order of {symbol}, applying additional processing fee", 
+                          extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'calculate_total_cost'})
+            # BUG: This fee is too high!
+            extra_fee = gross_proceeds * 0.02  # 2% extra (should be 0.2%)
+            commission += extra_fee
+        
+        net_proceeds = gross_proceeds - commission - sec_fee
+        
+        logger.info(f"[calculate_total_cost] SELL proceeds breakdown - Gross: ${gross_proceeds:.2f}, Commission: ${commission:.2f}, SEC Fee: ${sec_fee:.2f}, Net: ${net_proceeds:.2f}", 
+                   extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'calculate_total_cost',
+                          'extra_data': {'gross_proceeds': gross_proceeds, 'commission': commission, 'sec_fee': sec_fee, 'net_proceeds': net_proceeds}})
+        
+        return {'base_amount': gross_proceeds, 'commission': commission, 'fees': sec_fee, 'total_cost': net_proceeds}
+
+
+def calculate_estimated_pnl(symbol: str, quantity: int, price: float, order_type: OrderType, trace_id: str, order_id: str) -> float:
+    """Calculate estimated PnL based on order type"""
+    logger.info(f"[calculate_estimated_pnl] Calculating PnL for {order_type} order", 
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'calculate_estimated_pnl'})
+    
+    cost_basis = get_cost_basis(symbol)
+    price_diff = price - cost_basis
+    
+    if order_type == OrderType.BUY:
+        pnl = -(price_diff * quantity)  # Negative because we're buying
+        logger.info(f"[calculate_estimated_pnl] BUY PnL: ${pnl:.2f} (paying ${price} vs cost basis ${cost_basis})", 
+                   extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'calculate_estimated_pnl',
+                          'extra_data': {'pnl': pnl, 'price': price, 'cost_basis': cost_basis}})
+    else:  # SELL
+        pnl = price_diff * quantity  # Positive because we're selling
+        logger.info(f"[calculate_estimated_pnl] SELL PnL: ${pnl:.2f} (selling at ${price} vs cost basis ${cost_basis})", 
+                   extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'calculate_estimated_pnl',
+                          'extra_data': {'pnl': pnl, 'price': price, 'cost_basis': cost_basis}})
+    
+    return round(pnl, 2)
+
+
+def calculate_commission(quantity: int, price: float, order_type: OrderType, trace_id: str, order_id: str) -> float:
+    """Calculate trading commission based on order size"""
+    logger.info("[calculate_commission] Calculating commission", 
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'calculate_commission'})
+    
+    base_commission = 0.005  # 0.5% base rate
+    order_value = quantity * price
+    
+    logger.info(f"[calculate_commission] Order value: ${order_value:.2f}", 
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'calculate_commission',
+                      'extra_data': {'order_value': order_value, 'quantity': quantity, 'price': price}})
+    
+    # Volume-based discount tiers
+    if order_value > 100000:
+        commission_rate = 0.002  # 0.2% for large orders
+        logger.info("[calculate_commission] Applied large order discount (0.2%)", 
+                   extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'calculate_commission'})
+    elif order_value > 50000:
+        commission_rate = 0.003  # 0.3% for medium orders
+        logger.info("[calculate_commission] Applied medium order discount (0.3%)", 
+                   extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'calculate_commission'})
+    else:
+        commission_rate = base_commission
+    
+    commission = order_value * commission_rate
+    
+    # BUG: Rounding too early causes precision loss on large orders
+    # For $500K order: 500000 * 0.002 = 1000.00, but intermediate calculations may lose cents
+    commission_rounded = round(commission, 2)
+    
+    logger.info(f"[calculate_commission] Commission calculated: ${commission_rounded:.2f} ({commission_rate*100}% of ${order_value:.2f})", 
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'calculate_commission', 
+                      'extra_data': {'commission_before_rounding': commission, 'commission_final': commission_rounded, 'rate': commission_rate}})
+    
+    return commission_rounded
+
+
+def estimate_slippage(quantity: int, symbol: str, order_type: OrderType, trace_id: str, order_id: str) -> float:
+    """Estimate price slippage for large orders"""
+    logger.info(f"[estimate_slippage] Estimating slippage for {quantity} shares of {symbol}", 
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'estimate_slippage'})
+    
+    # Volatile stocks have higher slippage
+    volatile_symbols = {"TSLA": 0.015, "NVDA": 0.01, "META": 0.008}
+    base_slippage = volatile_symbols.get(symbol, 0.005)
+    
+    # Quantity impacts slippage
+    if quantity > 1000:
+        slippage = base_slippage * 2.0
+        logger.warning(f"[estimate_slippage] High slippage expected for large order: {slippage*100:.2f}%", 
+                      extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'estimate_slippage'})
+    elif quantity > 500:
+        slippage = base_slippage * 1.5
+    else:
+        slippage = base_slippage
+    
+    logger.info(f"[estimate_slippage] Estimated slippage: {slippage*100:.2f}%", 
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'estimate_slippage', 
+                      'extra_data': {'slippage_pct': slippage}})
+    
+    return slippage
+
+
+def adjust_price_for_slippage(price: float, slippage: float, order_type: OrderType) -> float:
+    """Adjust price based on estimated slippage"""
+    if order_type == OrderType.BUY:
+        # Buying: price goes up (unfavorable)
+        adjusted_price = price * (1 + slippage)
+    else:  # SELL
+        # Selling: price goes down (unfavorable)
+        adjusted_price = price * (1 - slippage)
+    
+    return round(adjusted_price, 2)
+
+
 def calculate_pnl(symbol: str, quantity: int, current_price: float, order_type: OrderType) -> float:
     """
-    Calculate estimated profit/loss
-    For BUY orders: negative (cost to buy)
-    For SELL orders: positive (gain from selling)
+    Calculate estimated profit/loss (simplified version for backward compatibility)
     """
     cost_basis = get_cost_basis(symbol)
     
-    # Bug: For large SELL orders, accidentally use inflated cost basis
-    if order_type == OrderType.SELL and quantity > 200:
-        cost_basis = cost_basis * 1.8  # Wrong calculation!
-    
     if order_type == OrderType.BUY:
-        # PnL is negative (we're spending money to buy)
         pnl = -(current_price - cost_basis) * quantity
     else:  # SELL
-        # PnL is positive (we're making money from selling)
         pnl = (current_price - cost_basis) * quantity
     
     return round(pnl, 2)
@@ -240,25 +374,14 @@ def calculate_pricing(request_data: PricingRequest, request: Request):
         logger.info(f"[calculate_pnl] Order value ${order_value:.2f} calculated successfully", 
                    extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'function': 'calculate_pnl', 'extra_data': {'order_value': order_value}})
         
-        # Calculate PnL
-        logger.info("[calculate_pnl] Calculating estimated profit/loss (PnL)", extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'function': 'calculate_pnl'})
-        cost_basis = get_cost_basis(request_data.symbol)
-        logger.info(f"[get_cost_basis] Cost basis for {request_data.symbol}: ${cost_basis}", 
-                   extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'function': 'get_cost_basis', 'extra_data': {'cost_basis': cost_basis}})
+        # Calculate total cost based on order type
+        logger.info("[calculate_pricing] Step 2: Calculating total cost and PnL", 
+                   extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'function': 'calculate_pricing'})
         
-        estimated_pnl = calculate_pnl(
-            request_data.symbol,
-            request_data.quantity,
-            current_price,
-            request_data.order_type
-        )
-        logger.info(f"[calculate_pnl] Estimated PnL calculated: ${estimated_pnl} ({request_data.order_type} order)", 
-                   extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'function': 'calculate_pnl', 'extra_data': {'estimated_pnl': estimated_pnl, 'order_type': request_data.order_type.value}})
+        cost_breakdown = calculate_total_cost(request_data.quantity, current_price, request_data.symbol, request_data.order_type, trace_id, request_data.order_id)
+        estimated_pnl = calculate_estimated_pnl(request_data.symbol, request_data.quantity, current_price, request_data.order_type, trace_id, request_data.order_id)
         
-        # Calculate total cost
-        total_cost = current_price * request_data.quantity
-        logger.info(f"[calculate_pnl] Total order cost: ${total_cost}", 
-                   extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'function': 'calculate_pnl', 'extra_data': {'total_cost': total_cost}})
+        total_cost = cost_breakdown['total_cost']
         
         timestamp = datetime.now().isoformat()
         

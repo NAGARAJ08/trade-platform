@@ -123,10 +123,142 @@ def is_market_open() -> bool:
     return market_open <= current_time <= market_close
 
 
+def validate_account_balance(quantity: int, price: float, symbol: str, order_type: OrderType, trace_id: str, order_id: str) -> tuple[bool, Optional[str]]:
+    """Validate account has sufficient balance/holdings based on order type"""
+    logger.info(f"[validate_account_balance] Validating account for {order_type} order", 
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'validate_account_balance'})
+    
+    if order_type == OrderType.BUY:
+        # Check buying power for purchase
+        account_balance = 500000  # $500K available
+        required_amount = quantity * price
+        
+        logger.info(f"[validate_account_balance] BUY - Required: ${required_amount:.2f}, Available: ${account_balance:.2f}", 
+                   extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'validate_account_balance',
+                          'extra_data': {'required': required_amount, 'available': account_balance}})
+        
+        if required_amount > account_balance:
+            logger.error(f"[validate_account_balance] Insufficient buying power: need ${required_amount:.2f}, have ${account_balance:.2f}", 
+                        extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'validate_account_balance'})
+            return False, f"Insufficient buying power: ${required_amount:.2f} required, ${account_balance:.2f} available"
+    else:
+        # Check holdings for sale
+        holdings = {"AAPL": 500, "GOOGL": 200, "MSFT": 800, "TSLA": 300, "NVDA": 300}
+        current_holdings = holdings.get(symbol, 0)
+        
+        logger.info(f"[validate_account_balance] SELL - Current holdings: {current_holdings} shares of {symbol}", 
+                   extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'validate_account_balance',
+                          'extra_data': {'symbol': symbol, 'holdings': current_holdings, 'sell_quantity': quantity}})
+        
+        if current_holdings < quantity:
+            logger.error(f"[validate_account_balance] Insufficient shares: have {current_holdings}, trying to sell {quantity}", 
+                        extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'validate_account_balance'})
+            return False, f"Insufficient shares: have {current_holdings} shares, cannot sell {quantity}"
+    
+    logger.info("[validate_account_balance] Account validation passed", 
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'validate_account_balance'})
+    return True, None
+
+
+def validate_order_requirements(symbol: str, quantity: int, price: float, order_type: OrderType, trace_id: str, order_id: str) -> tuple[bool, Optional[str]]:
+    """Validate order-type specific requirements"""
+    logger.info(f"[validate_order_requirements] Validating {order_type} order requirements", 
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'validate_order_requirements'})
+    
+    # Validate account balance/holdings
+    is_valid, msg = validate_account_balance(quantity, price, symbol, order_type, trace_id, order_id)
+    if not is_valid:
+        return False, msg
+    
+    logger.info(f"[validate_order_requirements] {order_type} order validation passed", 
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'validate_order_requirements'})
+    return True, None
+
+
+def get_symbol_metadata(symbol: str) -> Optional[Dict[str, Any]]:
+    """Get metadata for a trading symbol"""
+    symbol_registry = {
+        "AAPL": {"exchange": "NASDAQ", "sector": "Technology", "lot_size": 1, "max_order": 10000},
+        "GOOGL": {"exchange": "NASDAQ", "sector": "Technology", "lot_size": 1, "max_order": 5000},
+        "MSFT": {"exchange": "NASDAQ", "sector": "Technology", "lot_size": 1, "max_order": 10000},
+        "AMZN": {"exchange": "NASDAQ", "sector": "Consumer", "lot_size": 1, "max_order": 5000},
+        "TSLA": {"exchange": "NASDAQ", "sector": "Automotive", "lot_size": 1, "max_order": 3000},
+        "META": {"exchange": "NASDAQ", "sector": "Technology", "lot_size": 1, "max_order": 5000},
+        "NVDA": {"exchange": "NASDAQ", "sector": "Technology", "lot_size": 1, "max_order": 5000}
+    }
+    return symbol_registry.get(symbol)
+
+
+def check_symbol_tradeable(symbol: str, trace_id: str, order_id: str) -> tuple[bool, Optional[str]]:
+    """Check if symbol is currently tradeable"""
+    logger.info(f"[check_symbol_tradeable] Checking tradeability for {symbol}", 
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'check_symbol_tradeable'})
+    
+    metadata = get_symbol_metadata(symbol)
+    if not metadata:
+        logger.error(f"[check_symbol_tradeable] Symbol {symbol} not found in registry", 
+                    extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'check_symbol_tradeable'})
+        return False, f"Symbol '{symbol}' is not supported for trading"
+    
+    # Check exchange status (simulated)
+    exchange = metadata['exchange']
+    logger.info(f"[check_symbol_tradeable] Symbol {symbol} found on {exchange} exchange", 
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'check_symbol_tradeable', 'extra_data': metadata})
+    
+    return True, None
+
+
 def validate_symbol(symbol: str) -> bool:
     """Validate if symbol is supported"""
     supported_symbols = ["AAPL", "GOOGL", "MSFT", "AMZN", "TSLA", "META", "NVDA"]
     return symbol in supported_symbols
+
+
+def normalize_quantity_to_lot_size(quantity: int, symbol: str, trace_id: str, order_id: str) -> int:
+    """Normalize quantity to exchange lot size requirements"""
+    logger.info(f"[normalize_quantity_to_lot_size] Normalizing quantity {quantity} for {symbol}", 
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'normalize_quantity_to_lot_size'})
+    
+    metadata = get_symbol_metadata(symbol)
+    if not metadata:
+        logger.warning(f"[normalize_quantity_to_lot_size] No metadata for {symbol}, using quantity as-is", 
+                      extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'normalize_quantity_to_lot_size'})
+        return quantity
+    
+    lot_size = metadata['lot_size']
+    if quantity % lot_size != 0:
+        normalized = (quantity // lot_size) * lot_size
+        logger.info(f"[normalize_quantity_to_lot_size] Adjusted quantity from {quantity} to {normalized} (lot size: {lot_size})", 
+                   extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'normalize_quantity_to_lot_size', 
+                          'extra_data': {'original': quantity, 'normalized': normalized, 'lot_size': lot_size}})
+        return normalized
+    
+    return quantity
+
+
+def check_order_limits(quantity: int, symbol: str, trace_id: str, order_id: str) -> tuple[bool, Optional[str]]:
+    """Check if order quantity is within exchange limits"""
+    logger.info(f"[check_order_limits] Checking limits for {quantity} shares of {symbol}", 
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'check_order_limits'})
+    
+    metadata = get_symbol_metadata(symbol)
+    if metadata:
+        max_order = metadata['max_order']
+        if quantity > max_order:
+            logger.warning(f"[check_order_limits] Order quantity {quantity} exceeds maximum {max_order} for {symbol}", 
+                          extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'check_order_limits', 
+                                 'extra_data': {'quantity': quantity, 'max_allowed': max_order}})
+            return False, f"Order quantity {quantity} exceeds maximum allowed {max_order} for {symbol}"
+    
+    # Global limit check
+    if quantity > 10000:
+        logger.error(f"[check_order_limits] Order quantity {quantity} exceeds global maximum 10000", 
+                    extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'check_order_limits'})
+        return False, f"Order quantity {quantity} exceeds global maximum limit of 10000"
+    
+    logger.info(f"[check_order_limits] Order limits check passed", 
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'check_order_limits'})
+    return True, None
 
 
 def validate_quantity(quantity: int) -> int:
@@ -179,7 +311,24 @@ def validate_trade(trade: TradeValidationRequest, request: Request):
     
     timestamp = datetime.now().isoformat()
     
-    # Check market hours
+    # Step 1: Check if symbol is tradeable
+    logger.info("[validate_trade] Step 1: Checking symbol tradeability", 
+               extra={'trace_id': trace_id, 'order_id': trade.order_id, 'function': 'validate_trade'})
+    is_tradeable, reason = check_symbol_tradeable(trade.symbol, trace_id, trade.order_id)
+    if not is_tradeable:
+        logger.warning(f"[validate_trade] Symbol validation failed: {reason}", 
+                      extra={'trace_id': trace_id, 'order_id': trade.order_id, 'function': 'validate_trade'})
+        return TradeValidationResponse(
+            valid=False,
+            reason=reason,
+            order_id=trade.order_id,
+            normalized_quantity=trade.quantity,
+            timestamp=timestamp
+        )
+    
+    # Step 2: Check market hours
+    logger.info("[validate_trade] Step 2: Checking market hours", 
+               extra={'trace_id': trace_id, 'order_id': trade.order_id, 'function': 'validate_trade'})
     logger.info("[validate_trade] is_market_open checking...", extra={'trace_id': trace_id, 'order_id': trade.order_id, 'function': 'is_market_open'})
     market_open = is_market_open()
     logger.info(f"[is_market_open] Market status: {'OPEN' if market_open else 'CLOSED'}", extra={'trace_id': trace_id, 'order_id': trade.order_id, 'function': 'is_market_open', 'extra_data': {'market_open': market_open}})
@@ -198,27 +347,63 @@ def validate_trade(trade: TradeValidationRequest, request: Request):
             normalized_quantity=trade.quantity,
             timestamp=timestamp
         )
-        
-    # Validate quantity
-    logger.info(f"[validate_trade] validate_quantity processing: {trade.quantity}", extra={'trace_id': trace_id, 'order_id': trade.order_id, 'function': 'validate_quantity'})
-    normalized_qty = validate_quantity(trade.quantity)
     
-    if normalized_qty != trade.quantity:
-        logger.info(f"[validate_quantity] Normalized from {trade.quantity} to {normalized_qty}", extra={'trace_id': trace_id, 'order_id': trade.order_id, 'function': 'validate_quantity', 'extra_data': {'original': trade.quantity, 'normalized': normalized_qty}})
+    # Step 3: Validate order type specific requirements
+    logger.info("[validate_trade] Step 3: Validating order type specific requirements", 
+               extra={'trace_id': trace_id, 'order_id': trade.order_id, 'function': 'validate_trade'})
     
-    if normalized_qty == -1:
-        logger.warning(f"[validate_trade] VALIDATION FAILED - Quantity {trade.quantity} exceeds maximum limit", extra={
+    # Basic quantity validation
+    if trade.quantity <= 0:
+        logger.error(f"[validate_trade] Invalid quantity: {trade.quantity}", 
+                    extra={'trace_id': trace_id, 'order_id': trade.order_id, 'function': 'validate_trade'})
+        return TradeValidationResponse(
+            valid=False,
+            reason=f"Quantity must be positive (received: {trade.quantity})",
+            order_id=trade.order_id,
+            normalized_quantity=trade.quantity,
+            timestamp=timestamp
+        )
+    
+    # Get estimated price for validation (simulated)
+    # BUG: Using stale/default price instead of real-time price from pricing service
+    # This causes validation to pass/fail incorrectly when market moves
+    estimated_price = 175.0  # Hardcoded - should query pricing service!
+    
+    logger.info(f"[validate_trade] Using estimated price ${estimated_price} for validation (NOT real-time price!)", 
+               extra={'trace_id': trace_id, 'order_id': trade.order_id, 'function': 'validate_trade',
+                      'extra_data': {'estimated_price': estimated_price, 'symbol': trade.symbol}})
+    
+    # Call generic validation function
+    order_valid, validation_msg = validate_order_requirements(trade.symbol, trade.quantity, estimated_price, trade.order_type, trace_id, trade.order_id)
+    
+    if not order_valid:
+        logger.warning(f"[validate_trade] Order validation failed: {validation_msg}", 
+                      extra={'trace_id': trace_id, 'order_id': trade.order_id, 'function': 'validate_trade'})
+        return TradeValidationResponse(
+            valid=False,
+            reason=validation_msg,
+            order_id=trade.order_id,
+            normalized_quantity=trade.quantity,
+            timestamp=timestamp
+        )
+    
+    # Normalize to lot size
+    normalized_qty = normalize_quantity_to_lot_size(trade.quantity, trade.symbol, trace_id, trade.order_id)
+    
+    # Check order limits
+    limits_ok, limit_reason = check_order_limits(normalized_qty, trade.symbol, trace_id, trade.order_id)
+    if not limits_ok:
+        logger.warning(f"[validate_trade] VALIDATION FAILED - {limit_reason}", extra={
             "trace_id": trace_id,
             "order_id": trade.order_id,
             "function": "validate_trade",
-            "quantity": trade.quantity,
-            'extra_data': {'reason': 'quantity_exceeds_maximum', 'max_allowed': 10000}
+            "quantity": trade.quantity
         })
         return TradeValidationResponse(
             valid=False,
-            reason=f"Quantity {trade.quantity} exceeds maximum limit of 10000",
+            reason=limit_reason,
             order_id=trade.order_id,
-            normalized_quantity=trade.quantity,
+            normalized_quantity=normalized_qty,
             timestamp=timestamp
         )
     

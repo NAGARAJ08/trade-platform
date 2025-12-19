@@ -105,6 +105,135 @@ def get_trace_id(x_trace_id: Optional[str] = Header(None)) -> str:
     return x_trace_id or str(uuid.uuid4())
 
 
+def assess_order_risk(symbol: str, quantity: int, price: float, pnl: float, order_type: OrderType, trace_id: str, order_id: str) -> Dict[str, Any]:
+    """Assess order-type specific risks"""
+    logger.info(f"[assess_order_risk] Assessing {order_type} order risks", 
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'assess_order_risk'})
+    
+    risk_points = 0
+    factors = {}
+    position_value = quantity * price
+    
+    if order_type == OrderType.BUY:
+        # Check if buying at peak price
+        if position_value > 100000:
+            risk_points += 15
+            factors['large_position_risk'] = 15
+            logger.warning("[assess_order_risk] Large BUY position detected, elevated risk", 
+                          extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'assess_order_risk'})
+        
+        # Check negative PnL on purchase (buying expensive)
+        if pnl < -5000:
+            risk_points += 10
+            factors['expensive_purchase_risk'] = 10
+            logger.warning(f"[assess_order_risk] Buying at high cost, PnL impact: ${pnl:.2f}", 
+                          extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'assess_order_risk'})
+    else:  # SELL
+        # Check if selling at loss
+        if pnl < 0:
+            risk_points += 20
+            factors['loss_realization_risk'] = 20
+            logger.error(f"[assess_order_risk] SELLING AT LOSS detected: ${pnl:.2f}", 
+                        extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'assess_order_risk'})
+        
+        # Check large position liquidation
+        if position_value > 50000:
+            risk_points += 10
+            factors['large_liquidation_risk'] = 10
+            logger.warning("[assess_order_risk] Large position liquidation, market impact risk", 
+                          extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'assess_order_risk'})
+    
+    logger.info(f"[assess_order_risk] {order_type} risk assessment: {risk_points} points", 
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'assess_order_risk',
+                      'extra_data': {'risk_points': risk_points, 'factors': factors}})
+    
+    return {'risk_points': risk_points, 'factors': factors}
+
+
+def check_portfolio_concentration(symbol: str, quantity: int, price: float, trace_id: str, order_id: str) -> tuple[float, Dict[str, Any]]:
+    """Check portfolio concentration risk"""
+    logger.info("[check_portfolio_concentration] Analyzing portfolio concentration", 
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'check_portfolio_concentration'})
+    
+    # Simulated portfolio (in real system, would query portfolio service)
+    portfolio_value = 1000000  # $1M portfolio
+    position_value = quantity * price
+    concentration = (position_value / portfolio_value) * 100
+    
+    concentration_risk = 0
+    if concentration > 10:
+        concentration_risk = 20
+        logger.warning(f"[check_portfolio_concentration] High concentration: {concentration:.1f}% of portfolio", 
+                      extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'check_portfolio_concentration'})
+    elif concentration > 5:
+        concentration_risk = 10
+    else:
+        concentration_risk = 0
+    
+    logger.info(f"[check_portfolio_concentration] Concentration risk: {concentration_risk} points ({concentration:.1f}% of portfolio)", 
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'check_portfolio_concentration', 
+                      'extra_data': {'concentration_pct': concentration, 'risk_points': concentration_risk}})
+    
+    return concentration_risk, {'concentration_pct': concentration, 'position_value': position_value}
+
+
+def check_sector_limits(symbol: str, trace_id: str, order_id: str) -> tuple[bool, Optional[str]]:
+    """Check if sector exposure limits are exceeded"""
+    logger.info(f"[check_sector_limits] Checking sector limits for {symbol}", 
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'check_sector_limits'})
+    
+    sector_map = {
+        "AAPL": "Technology", "GOOGL": "Technology", "MSFT": "Technology",
+        "NVDA": "Technology", "META": "Technology",
+        "TSLA": "Automotive", "AMZN": "Consumer"
+    }
+    
+    sector = sector_map.get(symbol, "Unknown")
+    
+    # Simulated sector exposure (in real system, would query portfolio service)
+    current_tech_exposure = 0.45  # 45% of portfolio in tech
+    
+    # PERFORMANCE BUG: Slow compliance check for high-exposure tech stocks
+    # This simulates a slow database query to compliance system
+    if sector == "Technology" and current_tech_exposure > 0.40:
+        logger.warning(f"[check_sector_limits] Technology sector exposure high: {current_tech_exposure*100:.1f}%, running deep compliance check...", 
+                      extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'check_sector_limits'})
+        time.sleep(3)  # Simulating slow compliance database query
+        logger.info(f"[check_sector_limits] Deep compliance check completed", 
+                   extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'check_sector_limits'})
+        # Don't block, just warn
+    
+    logger.info(f"[check_sector_limits] Sector check passed for {symbol} (Sector: {sector})", 
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'check_sector_limits'})
+    return True, None
+
+
+def validate_compliance_rules(symbol: str, quantity: int, price: float, order_type: OrderType, 
+                             trace_id: str, order_id: str) -> tuple[bool, Optional[str]]:
+    """Validate against compliance and regulatory rules"""
+    logger.info("[validate_compliance_rules] Running compliance checks", 
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'validate_compliance_rules'})
+    
+    position_value = quantity * price
+    
+    # Check single order size limit ($500K)
+    if position_value > 500000:
+        logger.error(f"[validate_compliance_rules] Order exceeds single trade limit: ${position_value:.2f} > $500,000", 
+                    extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'validate_compliance_rules'})
+        return False, f"Order value ${position_value:.2f} exceeds single trade limit of $500,000"
+    
+    # Check restricted stocks (simulated)
+    restricted_stocks = []  # Would come from compliance database
+    if symbol in restricted_stocks:
+        logger.error(f"[validate_compliance_rules] Symbol {symbol} is currently restricted", 
+                    extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'validate_compliance_rules'})
+        return False, f"Symbol {symbol} is currently restricted for trading"
+    
+    logger.info("[validate_compliance_rules] All compliance checks passed", 
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'validate_compliance_rules'})
+    return True, None
+
+
 def calculate_risk_score(
     symbol: str,
     quantity: int,
@@ -123,6 +252,8 @@ def calculate_risk_score(
     # Factor 1: Position size risk (0-30 points)
     # Large positions are riskier
     position_value = quantity * price
+    
+    # Add detailed logging for debugging
     if position_value > 100000:
         position_risk = 30
     elif position_value > 50000:
@@ -135,6 +266,7 @@ def calculate_risk_score(
     risk_score += position_risk
     risk_factors["position_size_risk"] = position_risk
     risk_factors["position_value"] = position_value
+    risk_factors["position_risk_logic"] = f"position_value ${position_value:.2f} → {position_risk} points"
     
     # Factor 2: PnL risk (0-30 points)
     # Negative PnL or large PnL values are riskier
@@ -152,14 +284,17 @@ def calculate_risk_score(
     risk_score += pnl_risk
     risk_factors["pnl_risk"] = pnl_risk
     risk_factors["estimated_pnl"] = pnl
+    risk_factors["pnl_risk_logic"] = f"pnl ${pnl:.2f} → {pnl_risk} points"
     
     # Factor 3: Quantity risk (0-20 points)
     # Very large quantities are riskier
+    # BUG: Off-by-one - should use >= for consistent boundary behavior
+    # quantity=100 gets 5 points, quantity=101 gets 10 points (big jump!)
     if quantity > 500:
         quantity_risk = 20
     elif quantity > 200:
         quantity_risk = 15
-    elif quantity > 100:
+    elif quantity > 100:  # BUG: What about exactly 100?
         quantity_risk = 10
     else:
         quantity_risk = 5
@@ -167,6 +302,7 @@ def calculate_risk_score(
     risk_score += quantity_risk
     risk_factors["quantity_risk"] = quantity_risk
     risk_factors["quantity"] = quantity
+    risk_factors["quantity_risk_logic"] = f"quantity {quantity} → {quantity_risk} points"
     
     # Factor 4: Symbol volatility risk (0-20 points)
     # Some symbols are considered more volatile
@@ -176,15 +312,20 @@ def calculate_risk_score(
     risk_score += volatility_risk
     risk_factors["volatility_risk"] = volatility_risk
     risk_factors["symbol"] = symbol
+    risk_factors["volatility_risk_logic"] = f"symbol {symbol} → {volatility_risk} points (volatile={symbol in volatile_symbols})"
+    risk_factors["total_risk_score"] = risk_score
     
     return risk_score, risk_factors
 
 
 def determine_risk_level(risk_score: float) -> RiskLevel:
     """Determine risk level based on score"""
+    # BUG: Boundary condition inconsistency
+    # Score of exactly 40.0 or 70.0 gets inconsistent treatment
+    # Should use > instead of >= for clear boundaries
     if risk_score >= 70:
         return RiskLevel.HIGH
-    elif risk_score >= 40:
+    elif risk_score >= 40:  # BUG: What if score is exactly 40.0?
         return RiskLevel.MEDIUM
     else:
         return RiskLevel.LOW
@@ -234,7 +375,37 @@ def assess_risk(request_data: RiskAssessmentRequest, request: Request):
     })
     
     try:
-        # Calculate risk score
+        # Step 1: Validate compliance rules
+        logger.info("[assess_risk] Step 1: Validating compliance rules", 
+                   extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'function': 'assess_risk'})
+        
+        compliance_ok, compliance_reason = validate_compliance_rules(
+            request_data.symbol, request_data.quantity, request_data.price, 
+            request_data.order_type, trace_id, request_data.order_id
+        )
+        
+        if not compliance_ok:
+            logger.error(f"[assess_risk] Compliance check failed: {compliance_reason}", 
+                        extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'function': 'assess_risk'})
+            raise HTTPException(status_code=403, detail=f"Compliance validation failed: {compliance_reason}")
+        
+        # Step 2: Check sector limits
+        logger.info("[assess_risk] Step 2: Checking sector exposure limits", 
+                   extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'function': 'assess_risk'})
+        sector_ok, sector_reason = check_sector_limits(request_data.symbol, trace_id, request_data.order_id)
+        
+        # Step 3: Order type specific risk assessment
+        logger.info("[assess_risk] Step 3: Performing order type specific risk assessment", 
+                   extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'function': 'assess_risk'})
+        
+        logger.info(f"[assess_risk] Analyzing {request_data.order_type.value} order risks", 
+                   extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'function': 'assess_risk'})
+        order_risk = assess_order_risk(request_data.symbol, request_data.quantity, request_data.price, 
+                                      request_data.pnl, request_data.order_type, trace_id, request_data.order_id)
+        
+        # Step 4: Calculate overall risk score
+        logger.info("[assess_risk] Step 4: Calculating comprehensive risk score", 
+                   extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'function': 'assess_risk'})
         logger.info("[assess_risk] calculate_risk_score processing...", extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'function': 'calculate_risk_score'})
         
         # Simulate slow processing for high-value orders
