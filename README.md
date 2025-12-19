@@ -182,3 +182,76 @@ Each log entry includes `trace_id` for distributed tracing across services.
 - Pydantic 2.5.3
 
 ---
+
+## Function Call Hierarchy
+
+The codebase implements **realistic nested function calls** with up to **4 levels of depth** within services and **5 levels cross-service**.
+
+### Call Statistics
+
+| Service | Entry Functions | Internal Functions | Max Nesting Depth |
+|---------|----------------|-------------------|------------------|
+| **Trade Service** | 2 | 9 | 4 levels |
+| **Pricing Service** | 1 | 6 | 3 levels |
+| **Risk Service** | 1 | 7 | 3 levels |
+| **Orchestrator** | 1 | 2 | 5 levels (cross-service) |
+
+### Trade Service Call Tree
+
+**Entry:** `validate_trade()` → Calls 7 functions, max depth 4 levels
+
+```
+validate_trade()
+├── check_symbol_tradeable() → get_symbol_metadata()
+├── is_market_open()
+├── validate_order_requirements() → validate_account_balance()
+├── normalize_quantity_to_lot_size() → get_symbol_metadata()
+└── check_order_limits() → get_symbol_metadata()
+```
+
+### Pricing Service Call Tree
+
+**Entry:** `calculate_pricing()` → Calls 5 functions, max depth 3 levels
+
+```
+calculate_pricing()
+├── get_market_price()
+├── calculate_total_cost()
+└── calculate_estimated_pnl() → get_cost_basis()
+```
+
+### Risk Service Call Tree
+
+**Entry:** `assess_risk()` → Calls 8 functions, max depth 3 levels
+
+```
+assess_risk()
+├── validate_compliance_rules()
+├── check_sector_limits()
+├── assess_order_risk()
+├── calculate_risk_score()
+├── determine_risk_level()
+└── get_recommendation()
+```
+
+### Orchestrator Cross-Service Cascade
+
+**Entry:** `place_order()` → Triggers **5-level cascade** across services
+
+```
+place_order()
+├── call_service() → Trade.validate_trade() [4 levels deep]
+├── call_service() → Pricing.calculate_pricing() [3 levels deep]
+├── call_service() → Risk.assess_risk() [3 levels deep]
+└── call_service() → Trade.execute_trade()
+```
+
+### Reusable Functions
+
+- `get_symbol_metadata()` - Called **3 times** (trade service)
+- `get_trace_logger()` - Called by all entry points
+- `call_service()` - Called **4 times** (orchestrator)
+
+**Total Internal Functions:** 24 across all services
+
+---
