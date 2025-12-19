@@ -157,7 +157,7 @@ def health_check():
 
 
 @app.post("/trades/validate", response_model=TradeValidationResponse)
-async def validate_trade(trade: TradeValidationRequest, request: Request):
+def validate_trade(trade: TradeValidationRequest, request: Request):
     """
     Validate a trade before execution
     Checks: market hours, symbol validity, quantity constraints
@@ -244,7 +244,7 @@ async def validate_trade(trade: TradeValidationRequest, request: Request):
 
 
 @app.post("/trades/execute", response_model=TradeExecutionResponse)
-async def execute_trade(trade: TradeExecutionRequest, request: Request):
+def execute_trade(trade: TradeExecutionRequest, request: Request):
     """
     Execute a validated trade
     """

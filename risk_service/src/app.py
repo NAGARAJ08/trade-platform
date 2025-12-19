@@ -213,7 +213,7 @@ def health_check():
 
 
 @app.post("/risk/assess", response_model=RiskAssessmentResponse)
-async def assess_risk(request_data: RiskAssessmentRequest, request: Request):
+def assess_risk(request_data: RiskAssessmentRequest, request: Request):
     """
     Perform comprehensive risk assessment on a trade order
     Evaluates multiple risk factors and provides approval/rejection recommendation
@@ -388,7 +388,7 @@ def get_risk_assessment(order_id: str, request: Request):
 
 
 @app.get("/risk/assessments/all")
-async def list_risk_assessments(request: Request):
+def list_risk_assessments(request: Request):
     """List all risk assessments"""
     trace_id = get_trace_id(request.headers.get("X-Trace-Id"))
     

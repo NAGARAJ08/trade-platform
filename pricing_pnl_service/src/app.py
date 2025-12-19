@@ -178,7 +178,7 @@ def health_check():
 
 
 @app.post("/pricing/calculate", response_model=PricingResponse)
-async def calculate_pricing(request_data: PricingRequest, request: Request):
+def calculate_pricing(request_data: PricingRequest, request: Request):
     """
     Calculate pricing and estimated PnL for an order
     This combines pricing lookup and PnL estimation
