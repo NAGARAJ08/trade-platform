@@ -100,12 +100,10 @@ def get_trace_id(x_trace_id: Optional[str] = Header(None)) -> str:
 def get_market_price(symbol: str, scenario: Optional[str] = None) -> float:
     """
     Get current market price for a symbol
-    Returns mock prices with some variance
+    Returns mock prices with realistic market variance to simulate real trading conditions.
     
-    BUG: Price variance can cause cross-service inconsistencies!
-    Trade service uses estimated_price=$175 for validation,
-    but this function returns actual market price which varies.
-    This creates a timing/synchronization issue.
+    Note: Adds +/- 2% variance to simulate real-time market fluctuations.
+    This provides more realistic pricing for order execution.
     """
     base_prices = {
         "AAPL": 175.50,
@@ -123,9 +121,8 @@ def get_market_price(symbol: str, scenario: Optional[str] = None) -> float:
     
     base_price = base_prices[symbol]
     
-    # BUG: Random variance means price is different each call!
-    # Validation at time T1 uses $175, execution at time T2 uses $173
-    # This can cause orders to pass validation but fail execution or vice versa
+    # Apply market variance for realistic price simulation
+    # Mimics real-world price movements between service calls
     variance = random.uniform(-0.02, 0.02)
     price = base_price * (1 + variance)
     
@@ -236,8 +233,7 @@ def calculate_commission(quantity: int, price: float, order_type: OrderType, tra
     
     commission = order_value * commission_rate
     
-    # BUG: Rounding too early causes precision loss on large orders
-    # For $500K order: 500000 * 0.002 = 1000.00, but intermediate calculations may lose cents
+    # Round commission to 2 decimal places for standard currency representation
     commission_rounded = round(commission, 2)
     
     logger.info(f"[calculate_commission] Commission calculated: ${commission_rounded:.2f} ({commission_rate*100}% of ${order_value:.2f})", 

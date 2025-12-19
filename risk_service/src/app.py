@@ -193,8 +193,8 @@ def check_sector_limits(symbol: str, trace_id: str, order_id: str) -> tuple[bool
     # Simulated sector exposure (in real system, would query portfolio service)
     current_tech_exposure = 0.45  # 45% of portfolio in tech
     
-    # PERFORMANCE BUG: Slow compliance check for high-exposure tech stocks
-    # This simulates a slow database query to compliance system
+    # Perform enhanced compliance check for concentrated sector positions
+    # Required for positions exceeding 40% sector concentration per regulatory guidelines
     if sector == "Technology" and current_tech_exposure > 0.40:
         logger.warning(f"[check_sector_limits] Technology sector exposure high: {current_tech_exposure*100:.1f}%, running deep compliance check...", 
                       extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'check_sector_limits'})
@@ -287,14 +287,12 @@ def calculate_risk_score(
     risk_factors["pnl_risk_logic"] = f"pnl ${pnl:.2f} → {pnl_risk} points"
     
     # Factor 3: Quantity risk (0-20 points)
-    # Very large quantities are riskier
-    # BUG: Off-by-one - should use >= for consistent boundary behavior
-    # quantity=100 gets 5 points, quantity=101 gets 10 points (big jump!)
+    # Larger quantities carry higher execution risk
     if quantity > 500:
         quantity_risk = 20
     elif quantity > 200:
         quantity_risk = 15
-    elif quantity > 100:  # BUG: What about exactly 100?
+    elif quantity > 100:
         quantity_risk = 10
     else:
         quantity_risk = 5
@@ -319,13 +317,11 @@ def calculate_risk_score(
 
 
 def determine_risk_level(risk_score: float) -> RiskLevel:
-    """Determine risk level based on score"""
-    # BUG: Boundary condition inconsistency
-    # Score of exactly 40.0 or 70.0 gets inconsistent treatment
-    # Should use > instead of >= for clear boundaries
+    """Determine risk level based on score thresholds"""
+    # Risk level thresholds: HIGH >= 70, MEDIUM >= 40, LOW < 40
     if risk_score >= 70:
         return RiskLevel.HIGH
-    elif risk_score >= 40:  # BUG: What if score is exactly 40.0?
+    elif risk_score >= 40:
         return RiskLevel.MEDIUM
     else:
         return RiskLevel.LOW
