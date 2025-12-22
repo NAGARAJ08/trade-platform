@@ -385,33 +385,6 @@ def check_order_limits(quantity: int, symbol: str, trace_id: str, order_id: str)
     return True, None
 
 
-def validate_quantity(quantity: int) -> int:
-    """
-    Perform basic quantity validation and normalization.
-    
-    Args:
-        quantity: Requested order quantity
-    
-    Returns:
-        int: Validated quantity, or error codes:
-            - Returns quantity if valid (0 < quantity ≤ 10,000)
-            - Returns 0 if quantity < 0
-            - Returns -1 if quantity > 10,000 (exceeds maximum)
-    
-    Note:
-        This is a simple validation. Use check_order_limits() for
-        comprehensive limit checking with proper error messages.
-    """
-    if quantity < 0:
-        return 0
-    
-    # Check maximum limit
-    if quantity > 10000:
-        return -1  # Invalid
-    
-    return quantity
-
-
 @app.get("/")
 def root():
     """Root endpoint"""
