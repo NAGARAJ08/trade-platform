@@ -258,15 +258,35 @@ def place_order(order: OrderRequest, request: Request):
             logger.info(f"[place_order] Using normalized quantity: {actual_quantity} (original: {order.quantity})", 
                        extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order', 'extra_data': {'original': order.quantity, 'normalized': actual_quantity}})
         
-        # Step 2: Get pricing and PnL from Pricing-PnL Service
-        logger.info("[place_order] STEP 2: Starting pricing and PnL calculation with Pricing-PnL Service", extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order'})
+        # Step 1.5: Get validation price for comparison (demonstrates price variance)
+        logger.info("[place_order] Getting validation price snapshot from Pricing-PnL Service", extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order'})
+        validation_pricing_data = {
+            "order_id": order_id,
+            "symbol": order.symbol,
+            "quantity": actual_quantity,
+            "order_type": order.order_type.value
+        }
+        validation_pricing_start = time_module.time()
+        validation_pricing_result = call_service(
+            f"{PRICING_PNL_SERVICE_URL}/pricing/calculate",
+            "POST",
+            trace_id,
+            validation_pricing_data
+        )
+        validation_pricing_duration_ms = int((time_module.time() - validation_pricing_start) * 1000)
+        validation_price = validation_pricing_result.get("price")
+        logger.info(f"[place_order] Validation price snapshot: ${validation_price}", 
+                   extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order', 'extra_data': {'validation_price': validation_price, 'duration_ms': validation_pricing_duration_ms}})
+        
+        # Step 2: Get execution execution pricing and PnL from Pricing-PnL Service
+        logger.info("[place_order] STEP 2: Getting execution pricing and PnL calculation with Pricing-PnL Service", extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order'})
         pricing_data = {
             "order_id": order_id,
             "symbol": order.symbol,
             "quantity": actual_quantity,
             "order_type": order.order_type.value
         }
-        logger.info(f"[place_order] Sending pricing request to {PRICING_PNL_SERVICE_URL}/pricing/calculate", 
+        logger.info(f"[place_order] Sending execution pricing request to {PRICING_PNL_SERVICE_URL}/pricing/calculate", 
                    extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order', 'extra_data': pricing_data})
         
         pricing_start = time_module.time()
@@ -277,11 +297,18 @@ def place_order(order: OrderRequest, request: Request):
             pricing_data
         )
         pricing_duration_ms = int((time_module.time() - pricing_start) * 1000)
+        execution_price = pricing_result.get('price')
         
         logger.info(f"[place_order] calculate_pricing completed in {pricing_duration_ms}ms", 
                    extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order', 'extra_data': {'duration_ms': pricing_duration_ms, 'service': 'pricing_service'}})
-        logger.info(f"[place_order] calculate_pnl response - Price: ${pricing_result.get('price')}, Total Cost: ${pricing_result.get('total_cost')}, Est. PnL: ${pricing_result.get('estimated_pnl')}", 
+        logger.info(f"[place_order] Execution pricing - Price: ${execution_price}, Total Cost: ${pricing_result.get('total_cost')}, Est. PnL: ${pricing_result.get('estimated_pnl')}", 
                    extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order', 'extra_data': pricing_result})
+        
+        # Log price variance between validation and execution
+        price_variance = execution_price - validation_price
+        price_variance_pct = (price_variance / validation_price) * 100
+        logger.info(f"[place_order] Price variance detected - Validation: ${validation_price}, Execution: ${execution_price}, Difference: ${price_variance:.2f} ({price_variance_pct:+.2f}%)", 
+                   extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order', 'extra_data': {'validation_price': validation_price, 'execution_price': execution_price, 'variance': price_variance, 'variance_pct': price_variance_pct}})
         
         # Step 3: Assess risk with Risk Service
         logger.info("[place_order] STEP 3: Starting risk assessment with Risk Service", extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order'})
@@ -439,14 +466,21 @@ def place_order(order: OrderRequest, request: Request):
         return OrderResponse(
             order_id=order_id,
             status="EXECUTED",
-            message=f"Order executed successfully: {order.order_type} {actual_quantity} {order.symbol} @ ${pricing_result.get('price')}",
+            message=f"Order executed successfully: {order.order_type} {actual_quantity} {order.symbol} @ ${execution_price}",
             trace_id=trace_id,
             latency_ms=overall_duration_ms,
             details={
+                "price_variance": {
+                    "validation_price": validation_price,
+                    "execution_price": execution_price,
+                    "variance": round(price_variance, 2),
+                    "variance_pct": round(price_variance_pct, 2)
+                },
                 "performance": {
                     "total_duration_ms": overall_duration_ms,
                     "breakdown": {
                         "validation_ms": validation_duration_ms,
+                        "validation_pricing_ms": validation_pricing_duration_ms,
                         "pricing_ms": pricing_duration_ms,
                         "risk_assessment_ms": risk_duration_ms,
                         "execution_ms": execution_duration_ms
@@ -463,6 +497,9 @@ def place_order(order: OrderRequest, request: Request):
                         "price_per_share": pricing_result.get('price'),
                         "total_cost": pricing_result.get('total_cost'),
                         "estimated_pnl": pricing_result.get('estimated_pnl'),
+                        "commission": pricing_result.get('commission'),
+                        "fees": pricing_result.get('fees'),
+                        "base_amount": pricing_result.get('base_amount'),
                         "duration_ms": pricing_duration_ms,
                         "timestamp": pricing_result.get('timestamp')
                     },
@@ -487,6 +524,9 @@ def place_order(order: OrderRequest, request: Request):
                     "price": pricing_result.get('price'),
                     "total_cost": pricing_result.get('total_cost'),
                     "estimated_pnl": pricing_result.get('estimated_pnl'),
+                    "commission": pricing_result.get('commission'),
+                    "fees": pricing_result.get('fees'),
+                    "base_amount": pricing_result.get('base_amount'),
                     "risk_level": risk_result.get('risk_level'),
                     "performance": {
                         "overall_duration_ms": overall_duration_ms,

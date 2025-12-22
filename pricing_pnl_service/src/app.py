@@ -92,6 +92,9 @@ class PricingResponse(BaseModel):
     price: float
     estimated_pnl: float
     total_cost: float
+    commission: float
+    fees: float
+    base_amount: float
     timestamp: str
 
 
@@ -531,6 +534,9 @@ def calculate_pricing(request_data: PricingRequest, request: Request):
             price=current_price,
             estimated_pnl=estimated_pnl,
             total_cost=total_cost,
+            commission=cost_breakdown['commission'],
+            fees=cost_breakdown['fees'],
+            base_amount=cost_breakdown['base_amount'],
             timestamp=timestamp
         )
         
