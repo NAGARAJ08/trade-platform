@@ -192,9 +192,6 @@ def calculate_total_cost(quantity: int, price: float, symbol: str, order_type: O
     Note:
         BUY orders: total_cost = base + commission + fees (amount to debit)
         SELL orders: total_cost = base - commission - fees (net proceeds)
-        
-        BUG: Large SELL orders (>200 shares) of TSLA/NVDA incorrectly apply
-        2% extra fee instead of 0.2%
     """
     logger.info(f"[calculate_total_cost] Calculating cost for {order_type} order", 
                extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'calculate_total_cost'})
@@ -215,12 +212,11 @@ def calculate_total_cost(quantity: int, price: float, symbol: str, order_type: O
         commission = gross_proceeds * 0.005  # 0.5%
         sec_fee = gross_proceeds * 0.0000207  # SEC fee
         
-        # Bug: For large SELL orders of certain stocks, extra fee applied incorrectly
+        # For large SELL orders of certain stocks, extra fee applied
         if quantity > 200 and symbol in ["TSLA", "NVDA"]:
             logger.warning(f"[calculate_total_cost] Large SELL order of {symbol}, applying additional processing fee", 
                           extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'calculate_total_cost'})
-            # BUG: This fee is too high!
-            extra_fee = gross_proceeds * 0.02  # 2% extra (should be 0.2%)
+            extra_fee = gross_proceeds * 0.02  # 2% extra
             commission += extra_fee
         
         net_proceeds = gross_proceeds - commission - sec_fee

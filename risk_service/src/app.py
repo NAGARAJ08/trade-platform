@@ -246,10 +246,6 @@ def check_sector_limits(symbol: str, trace_id: str, order_id: str) -> tuple[bool
         - For Technology sector positions when exposure > 40%:
           Triggers 3-second deep compliance check (simulated database query)
         - Logs warnings for high sector concentration
-    
-    Note:
-        BUG: Deep compliance check causes 3s delay for NVDA/AAPL/MSFT orders
-        when tech sector exposure is already high
     """
     logger.info(f"[check_sector_limits] Checking sector limits for {symbol}", 
                extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'check_sector_limits'})
@@ -365,10 +361,6 @@ def calculate_risk_score(
         
         4. Volatility Risk (0-20 points):
            - TSLA: 20 pts | NVDA: 15 pts | META: 10 pts | Others: 5 pts
-    
-    Note:
-        BUG: Quantity threshold at exactly 100 causes jump from 5 to 10 points
-        at quantity=101 (off-by-one error in boundary condition)
     """
     risk_score = 0
     risk_factors = {}
@@ -454,10 +446,6 @@ def determine_risk_level(risk_score: float) -> RiskLevel:
         - score ≥ 70: HIGH
         - 40 ≤ score < 70: MEDIUM
         - score < 40: LOW
-    
-    Note:
-        BUG: Boundary scores of exactly 40.0 or 70.0 may have
-        ambiguous handling due to floating-point comparison
     """
     # Risk level thresholds: HIGH >= 70, MEDIUM >= 40, LOW < 40
     if risk_score >= 70:
