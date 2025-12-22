@@ -24,6 +24,9 @@ class JsonFormatter(logging.Formatter):
             log_data["order_id"] = record.order_id
         if hasattr(record, 'extra_data'):
             log_data.update(record.extra_data)
+        # Include stack trace if exception info is present
+        if record.exc_info:
+            log_data["exception"] = self.formatException(record.exc_info)
         return json.dumps(log_data)
 
 # Configure logging

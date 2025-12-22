@@ -1,6 +1,7 @@
 import logging
 import json
 import uuid
+import time as time_module
 from datetime import datetime, time
 from typing import Optional, Dict, Any
 from enum import Enum
@@ -25,6 +26,9 @@ class JsonFormatter(logging.Formatter):
             log_data["order_id"] = record.order_id
         if hasattr(record, 'extra_data'):
             log_data.update(record.extra_data)
+        # Include stack trace if exception info is present
+        if record.exc_info:
+            log_data["exception"] = self.formatException(record.exc_info)
         return json.dumps(log_data)
 
 # Configure logging
@@ -69,6 +73,7 @@ class OrderResponse(BaseModel):
     status: str
     message: str
     trace_id: str
+    latency_ms: Optional[int] = None
     details: Optional[Dict[str, Any]] = None
 
 
@@ -122,7 +127,7 @@ def call_service(url: str, method: str, trace_id: str, json_data: dict = None, t
                     extra={'trace_id': trace_id, 'function': 'call_service', 'extra_data': {'status_code': e.response.status_code, 'error_detail': error_detail}})
         raise HTTPException(status_code=e.response.status_code, detail=error_detail)
     except Exception as e:
-        logger.error(f"[call_service] Error calling {url} - {str(e)}", extra={'trace_id': trace_id, 'function': 'call_service'})
+        logger.exception(f"[call_service] Error calling {url} - {str(e)}", extra={'trace_id': trace_id, 'function': 'call_service', 'extra_data': {'url': url, 'error_type': type(e).__name__}})
         raise HTTPException(status_code=500, detail=f"Service call failed: {url}")
 
 
@@ -153,6 +158,9 @@ def place_order(order: OrderRequest, request: Request):
     trace_id = get_trace_id(request.headers.get("X-Trace-Id"))
     order_id = str(uuid.uuid4())
     
+    # Start overall timing
+    overall_start = time_module.time()
+    
     # Create trace-specific log file
     get_trace_logger(trace_id)
     
@@ -176,13 +184,18 @@ def place_order(order: OrderRequest, request: Request):
         }
         logger.info(f"[place_order] Sending validation request to {TRADE_SERVICE_URL}/trades/validate", 
                    extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order', 'extra_data': trade_data})
+        
+        validation_start = time_module.time()
         trade_result = call_service(
             f"{TRADE_SERVICE_URL}/trades/validate",
             "POST",
             trace_id,
             trade_data
         )
+        validation_duration_ms = int((time_module.time() - validation_start) * 1000)
         
+        logger.info(f"[place_order] validate_trade completed in {validation_duration_ms}ms", 
+                   extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order', 'extra_data': {'duration_ms': validation_duration_ms, 'service': 'trade_service'}})
         logger.info(f"[place_order] validate_trade response - Valid: {trade_result.get('valid')}", 
                    extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order', 'extra_data': trade_result})
         
@@ -214,13 +227,17 @@ def place_order(order: OrderRequest, request: Request):
         logger.info(f"[place_order] Sending pricing request to {PRICING_PNL_SERVICE_URL}/pricing/calculate", 
                    extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order', 'extra_data': pricing_data})
         
+        pricing_start = time_module.time()
         pricing_result = call_service(
             f"{PRICING_PNL_SERVICE_URL}/pricing/calculate",
             "POST",
             trace_id,
             pricing_data
         )
+        pricing_duration_ms = int((time_module.time() - pricing_start) * 1000)
         
+        logger.info(f"[place_order] calculate_pricing completed in {pricing_duration_ms}ms", 
+                   extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order', 'extra_data': {'duration_ms': pricing_duration_ms, 'service': 'pricing_service'}})
         logger.info(f"[place_order] calculate_pnl response - Price: ${pricing_result.get('price')}, Total Cost: ${pricing_result.get('total_cost')}, Est. PnL: ${pricing_result.get('estimated_pnl')}", 
                    extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order', 'extra_data': pricing_result})
         
@@ -237,18 +254,24 @@ def place_order(order: OrderRequest, request: Request):
         logger.info(f"[place_order] Sending risk assessment request to {RISK_SERVICE_URL}/risk/assess", 
                    extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order', 'extra_data': risk_data})
         
+        risk_start = time_module.time()
         try:
             risk_result = call_service(
                 f"{RISK_SERVICE_URL}/risk/assess",
                 "POST",
                 trace_id,
                 risk_data,
-                timeout=5.0
+                timeout=15.0
             )
+            risk_duration_ms = int((time_module.time() - risk_start) * 1000)
+            
+            logger.info(f"[place_order] assess_risk completed in {risk_duration_ms}ms", 
+                       extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order', 'extra_data': {'duration_ms': risk_duration_ms, 'service': 'risk_service'}})
         except HTTPException as timeout_ex:
+            risk_duration_ms = int((time_module.time() - risk_start) * 1000)
             if timeout_ex.status_code == 504:
-                logger.error("[place_order] Risk service timeout - request exceeded 5 second limit", 
-                            extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order', 'extra_data': {'service': 'risk_service', 'timeout_seconds': 5}})
+                logger.error(f"[place_order] Risk service timeout - request exceeded limit after {risk_duration_ms}ms", 
+                            extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order', 'extra_data': {'service': 'risk_service', 'duration_ms': risk_duration_ms}})
                 return OrderResponse(
                     order_id=order_id,
                     status="FAILED",
@@ -299,13 +322,17 @@ def place_order(order: OrderRequest, request: Request):
         logger.info(f"[place_order] Sending execution request to {TRADE_SERVICE_URL}/trades/execute", 
                    extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order', 'extra_data': execution_data})
         
+        execution_start = time_module.time()
         execution_result = call_service(
             f"{TRADE_SERVICE_URL}/trades/execute",
             "POST",
             trace_id,
             execution_data
         )
+        execution_duration_ms = int((time_module.time() - execution_start) * 1000)
         
+        logger.info(f"[place_order] execute_trade completed in {execution_duration_ms}ms", 
+                   extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order', 'extra_data': {'duration_ms': execution_duration_ms, 'service': 'trade_service'}})
         logger.info(f"[place_order] Trade execution completed - Status: {execution_result.get('status')}, Time: {execution_result.get('execution_time')}", 
                    extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order', 'extra_data': execution_result})
         logger.info("[place_order] Order executed successfully", extra={
@@ -324,22 +351,77 @@ def place_order(order: OrderRequest, request: Request):
             }
         })
         
+        # return OrderResponse(
+        #     order_id=order_id,
+        #     status="EXECUTED",
+        #     message=f"Order executed successfully: {order.order_type} {actual_quantity} {order.symbol} @ ${pricing_result.get('price')}",
+        #     trace_id=trace_id,
+        #     details={
+        #         "execution_flow": {
+        #             "validation": {
+        #                 "status": "passed",
+        #                 "normalized_quantity": actual_quantity,
+        #                 "duration_ms": validation_duration_ms,
+        #                 "timestamp": trade_result.get('timestamp')
+        #             },
+        #             "pricing_calculation": {
+        #                 "price_per_share": pricing_result.get('price'),
+        #                 "total_cost": pricing_result.get('total_cost'),
+        #                 "estimated_pnl": pricing_result.get('estimated_pnl'),
+        #                 "duration_ms": pricing_duration_ms,
+        #                 "timestamp": pricing_result.get('timestamp')
+        #             },
+        #             "risk_assessment": {
+        #                 "risk_level": risk_result.get('risk_level'),
+        #                 "risk_score": risk_result.get('risk_score'),
+        #                 "approved": risk_result.get('approved'),
+        #                 "risk_factors": risk_result.get('risk_factors'),
+        #                 "duration_ms": risk_duration_ms,
+        #                 "timestamp": risk_result.get('timestamp')
+        #             },
+        #             "execution": {
+        #                 "status": execution_result.get('status'),
+        #                 "duration_ms": execution_duration_ms,
+        #                 "execution_time": execution_result.get('execution_time')
+        #             }
+        #         },
+        # })
+        
+        # Calculate overall end-to-end latency
+        overall_duration_ms = int((time_module.time() - overall_start) * 1000)
+        
+        logger.info(f"[place_order] Order completed successfully in {overall_duration_ms}ms (end-to-end)", 
+                   extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order', 
+                          'extra_data': {'total_duration_ms': overall_duration_ms, 'status': 'EXECUTED'}})
+        
         return OrderResponse(
             order_id=order_id,
             status="EXECUTED",
             message=f"Order executed successfully: {order.order_type} {actual_quantity} {order.symbol} @ ${pricing_result.get('price')}",
             trace_id=trace_id,
+            latency_ms=overall_duration_ms,
             details={
+                "performance": {
+                    "total_duration_ms": overall_duration_ms,
+                    "breakdown": {
+                        "validation_ms": validation_duration_ms,
+                        "pricing_ms": pricing_duration_ms,
+                        "risk_assessment_ms": risk_duration_ms,
+                        "execution_ms": execution_duration_ms
+                    }
+                },
                 "execution_flow": {
                     "validation": {
                         "status": "passed",
                         "normalized_quantity": actual_quantity,
+                        "duration_ms": validation_duration_ms,
                         "timestamp": trade_result.get('timestamp')
                     },
                     "pricing_calculation": {
                         "price_per_share": pricing_result.get('price'),
                         "total_cost": pricing_result.get('total_cost'),
                         "estimated_pnl": pricing_result.get('estimated_pnl'),
+                        "duration_ms": pricing_duration_ms,
                         "timestamp": pricing_result.get('timestamp')
                     },
                     "risk_assessment": {
@@ -347,10 +429,12 @@ def place_order(order: OrderRequest, request: Request):
                         "risk_score": risk_result.get('risk_score'),
                         "approved": risk_result.get('approved'),
                         "risk_factors": risk_result.get('risk_factors'),
+                        "duration_ms": risk_duration_ms,
                         "timestamp": risk_result.get('timestamp')
                     },
                     "execution": {
                         "status": execution_result.get('status'),
+                        "duration_ms": execution_duration_ms,
                         "execution_time": execution_result.get('execution_time')
                     }
                 },
@@ -361,7 +445,14 @@ def place_order(order: OrderRequest, request: Request):
                     "price": pricing_result.get('price'),
                     "total_cost": pricing_result.get('total_cost'),
                     "estimated_pnl": pricing_result.get('estimated_pnl'),
-                    "risk_level": risk_result.get('risk_level')
+                    "risk_level": risk_result.get('risk_level'),
+                    "performance": {
+                        "overall_duration_ms": overall_duration_ms,
+                        "validation_ms": validation_duration_ms,
+                        "pricing_ms": pricing_duration_ms,
+                        "risk_assessment_ms": risk_duration_ms,
+                        "execution_ms": execution_duration_ms
+                    }
                 }
             }
         )
@@ -386,6 +477,7 @@ def place_order(order: OrderRequest, request: Request):
             execution_flow["validation"] = {
                 "status": "passed",
                 "normalized_quantity": trade_result.get('normalized_quantity'),
+                "duration_ms": validation_duration_ms if 'validation_duration_ms' in locals() else None,
                 "timestamp": trade_result.get('timestamp')
             }
         
@@ -394,6 +486,7 @@ def place_order(order: OrderRequest, request: Request):
                 "price_per_share": pricing_result.get('price'),
                 "total_cost": pricing_result.get('total_cost'),
                 "estimated_pnl": pricing_result.get('estimated_pnl'),
+                "duration_ms": pricing_duration_ms if 'pricing_duration_ms' in locals() else None,
                 "timestamp": pricing_result.get('timestamp')
             }
         
@@ -412,15 +505,29 @@ def place_order(order: OrderRequest, request: Request):
             "status_code": e.status_code
         }
         
+        # Calculate overall duration even for failures
+        overall_duration_ms = int((time_module.time() - overall_start) * 1000)
+        
+        logger.error(f"[place_order] Order failed after {overall_duration_ms}ms - {str(e.detail)}", 
+                    extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order', 
+                           'extra_data': {'total_duration_ms': overall_duration_ms, 'status': 'FAILED', 'failure_stage': failure_stage}})
+        
         return OrderResponse(
             order_id=order_id,
             status="FAILED",
             message=f"Order failed at {failure_stage.replace('_', ' ')}: {str(e.detail)}",
             trace_id=trace_id,
-            details={"execution_flow": execution_flow}
+            latency_ms=overall_duration_ms,
+            details={
+                "performance": {
+                    "total_duration_ms": overall_duration_ms,
+                    "failure_at_stage": failure_stage
+                },
+                "execution_flow": execution_flow
+            }
         )
     except Exception as e:
-        logger.error(f"[place_order] Order placement failed - {str(e)}", extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order'})
+        logger.exception(f"[place_order] Order placement failed - {str(e)}", extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order', 'extra_data': {'error_type': type(e).__name__}})
         raise HTTPException(status_code=500, detail=f"Order placement failed: {str(e)}")
 
 

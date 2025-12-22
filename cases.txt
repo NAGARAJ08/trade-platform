@@ -1,0 +1,809 @@
+Scenario 1: "Why are my large SELL orders more expensive than expected?"
+User Question to RCA Agent:
+
+"I noticed when I SELL 250 shares of NVDA, I'm getting much less money than when I SELL 100 shares. The commission seems way too high. Can you find out why?"
+
+# Normal SELL (no bug)
+curl -X POST http://localhost:8000/orders -H "Content-Type: application/json" \
+  -d '{"symbol": "AAPL", "quantity": 100, "order_type": "SELL"}'
+# Commission: ~$86 (0.5%)
+
+# Change holdings first to trigger bug
+# Edit trade_service/src/app.py line 140: "NVDA": 300
+# Then:
+curl -X POST http://localhost:8000/orders -H "Content-Type: application/json" \
+  -d '{"symbol": "NVDA", "quantity": 250, "order_type": "SELL"}'
+# Commission: ~$1,239 (2.5%!) ← BUG!
+
+
+Scenario 2: "SELL orders for tech stocks get rejected, but BUY orders work fine"
+User Question:
+
+"I keep getting risk rejections when trying to SELL NVDA, AAPL, MSFT but BUY orders go through. What's different about SELL risk assessment?"
+# BUY tech stock - should pass
+curl -X POST http://localhost:8000/orders -H "Content-Type: application/json" \
+  -d '{"symbol": "NVDA", "quantity": 100, "order_type": "BUY"}'
+
+# SELL tech stock at potential loss - higher risk score
+curl -X POST http://localhost:8000/orders -H "Content-Type: application/json" \
+  -d '{"symbol": "NVDA", "quantity": 100, "order_type": "SELL"}'
+
+
+Scenario 3: "Why did my order get normalized from 157 to 150 shares?"
+User Question:
+
+"I tried to BUY 157 shares of AAPL but the system only bought 150. Where did my 7 shares go? Is this a bug?"
+
+
+curl -X POST http://localhost:8000/orders -H "Content-Type: application/json" \
+  -d '{"symbol": "AAPL", "quantity": 157, "order_type": "BUY"}'
+
+
+
+Scenario 4: "Sometimes my orders fail with 'insufficient buying power' but I have money!"
+User Question:
+
+"I have $500K in my account. I tried to BUY 100 AAPL ($17K) and it worked. Then I tried 200 AAPL ($34K) and it FAILED saying insufficient funds. How is that possible?"
+
+# This should work
+curl -X POST http://localhost:8000/orders -H "Content-Type: application/json" \
+  -d '{"symbol": "AAPL", "quantity": 100, "order_type": "BUY"}'
+
+# This might fail if estimated_price is too high
+curl -X POST http://localhost:8000/orders -H "Content-Type: application/json" \
+  -d '{"symbol": "AAPL", "quantity": 2000, "order_type": "BUY"}'
+# 2000 × $175 (estimated) = $350K (under limit)
+# But actual price might make it fail
+
+
+
+Scenario 5: "Risk assessment takes 6+ seconds for some orders but not others"
+User Question:
+
+"My NVDA orders take forever (6+ seconds in risk assessment) but AAPL orders are instant. Why is risk service so slow for certain symbols?"
+
+
+# Fast risk assessment
+curl -X POST http://localhost:8000/orders -H "Content-Type: application/json" \
+  -d '{"symbol": "AAPL", "quantity": 50, "order_type": "BUY"}'
+# Check timestamps in trace log
+
+# Slow risk assessment  
+curl -X POST http://localhost:8000/orders -H "Content-Type: application/json" \
+  -d '{"symbol": "NVDA", "quantity": 300, "order_type": "BUY"}'
+# Should have 6 second delay in risk service
+
+
+
+
+
+Scenario 6: "My PnL shows negative for SELL orders - shouldn't I be making money?"
+User Question:
+
+"I'm SELLING AAPL at $175 and my cost basis is $165. That's a $10 profit per share, so why does the PnL show as NEGATIVE in the response?"
+
+
+curl -X POST http://localhost:8000/orders -H "Content-Type: application/json" \
+  -d '{"symbol": "AAPL", "quantity": 100, "order_type": "SELL"}'
+# Check estimated_pnl in response
+# AAPL price ~$173, cost basis $165 = should be ~+$800
+
+
+
+
+Scenario 7: "I got rejected for 'sector limits' but I've never bought tech stocks before!"
+User Question:
+
+"First order of the day - trying to BUY 100 NVDA. Got rejected saying 'Technology sector exposure high: 45%'. But I haven't made any trades today! Is the system tracking someone else's portfolio?"
+
+curl -X POST http://localhost:8000/orders -H "Content-Type: application/json" \
+  -d '{"symbol": "NVDA", "quantity": 500, "order_type": "BUY"}'
+# Check if sector warning appears in logs
+
+
+
+Pattern Detection:
+
+"Show me all failed SELL orders in the last hour and find common patterns"
+
+Comparative Analysis:
+
+"Compare successful BUY orders vs failed BUY orders - what's different?"
+
+Code Path Analysis:
+
+"Which code path does a SELL 250 NVDA order take vs SELL 100 NVDA?"
+
+Root Cause Chain:
+
+"Trace back why order ABC123 was rejected - what was the first function that caused the failure?"
+
+Cross-Service Correlation:
+
+"When pricing service returns high PnL, does risk service rejection rate increase?"
+
+Hidden Bugs:
+
+"Find orders where commission > 1% of order value - this shouldn't happen"
+
+Performance Issues:
+
+"Which function in the execution flow takes the longest for NVDA orders?"
+
+Data Inconsistencies:
+
+"Show me orders where normalized_quantity != requested quantity and explain why"
+
+
+
+
+
+
+
+
+Services Enhanced! Here's What Changed:
+✅ Bug #1: Pricing Fee Bug (NOW TESTABLE!)
+Fixed Holdings: NVDA: 100→300, TSLA: 150→300
+Test: SELL 250 NVDA or SELL 250 TSLA
+Bug: Applies 2% extra fee instead of 0.2%
+Logs: Will show "Large SELL order, applying additional processing fee"
+
+
+✅ Bug #2: Stale Price Bug (NEW!)
+Location: Trade service validation
+Issue: Uses hardcoded $175 estimate instead of real-time price
+Test: BUY 2000 AAPL (2000×$175=$350K passes, but real price $177×2000=$354K might exceed limit)
+Logs: Will show "Using estimated price $175 for validation (NOT real-time price!)"
+
+ Bug #3: Rounding Bug (NEW!)
+Location: Pricing service commission calculation
+Issue: Rounds too early, loses precision on large orders
+Test: Large orders >$100K
+Logs: Shows commission_before_rounding vs commission_final
+
+
+ Bug #4: Boundary Condition Bug (NEW!)
+Location: Risk service risk level determination
+Issue: Score of exactly 40.0 or 70.0 has ambiguous handling
+Test: Create order that results in exactly 40 or 70 risk score
+Logs: Risk factors show score calculation breakdown
+
+
+
+
+
+ Bug #5: Off-by-One Bug (NEW!)
+Location: Risk service quantity risk
+Issue: quantity=100 gets 5 points, quantity=101 gets 10 points (big jump!)
+Test: Compare orders with qty=100 vs qty=101
+Logs: Shows quantity_risk_logic explaining the jump
+
+
+✅ Bug #6: Cross-Service Timing Bug (ENHANCED!)
+Location: Price variance between validation and execution
+Issue: Random ±2% variance means different prices at different times
+Test: Run same order multiple times, compare prices
+Logs: Validation price vs execution price mismatch
+
+
+
+Scenario 1: "Why are my large SELL orders so expensive?"
+
+# Normal SELL
+curl -X POST http://localhost:8000/orders -H "Content-Type: application/json" \
+  -d '{"symbol": "NVDA", "quantity": 100, "order_type": "SELL"}'
+# Commission: ~0.5%
+
+output: 
+
+{
+  "order_id": "930c6cb8-6a05-49bb-868b-5bbbd56d134e",
+  "status": "EXECUTED",
+  "message": "Order executed successfully: SELL 100 NVDA @ $502.93",
+  "trace_id": "b41e81c4-4b1f-4377-ad17-1e2541162e1c",
+  "latency_ms": 11250,
+  "details": {
+    "performance": {
+      "total_duration_ms": 11250,
+      "breakdown": {
+        "validation_ms": 2079,
+        "pricing_ms": 2037,
+        "risk_assessment_ms": 5071,
+        "execution_ms": 2049
+      }
+    },
+    "execution_flow": {
+      "validation": {
+        "status": "passed",
+        "normalized_quantity": 100,
+        "duration_ms": 2079,
+        "timestamp": "2025-12-19T21:27:56.009324"
+      },
+      "pricing_calculation": {
+        "price_per_share": 502.93,
+        "total_cost": 50040.493934900005,
+        "estimated_pnl": 2793,
+        "duration_ms": 2037,
+        "timestamp": "2025-12-19T21:27:58.059095"
+      },
+      "risk_assessment": {
+        "risk_level": "MEDIUM",
+        "risk_score": 45,
+        "approved": true,
+        "risk_factors": {
+          "position_size_risk": 20,
+          "position_value": 50293,
+          "position_risk_logic": "position_value $50293.00 → 20 points",
+          "pnl_risk": 5,
+          "estimated_pnl": 2793,
+          "pnl_risk_logic": "pnl $2793.00 → 5 points",
+          "quantity_risk": 5,
+          "quantity": 100,
+          "quantity_risk_logic": "quantity 100 → 5 points",
+          "volatility_risk": 15,
+          "symbol": "NVDA",
+          "volatility_risk_logic": "symbol NVDA → 15 points (volatile=True)",
+          "total_risk_score": 45
+        },
+        "duration_ms": 5071,
+        "timestamp": "2025-12-19T21:28:03.134847"
+      },
+      "execution": {
+        "status": "EXECUTED",
+        "duration_ms": 2049,
+        "execution_time": "2025-12-19T21:28:05.184108"
+      }
+    },
+    "summary": {
+      "symbol": "NVDA",
+      "order_type": "SELL",
+      "quantity": 100,
+      "price": 502.93,
+      "total_cost": 50040.493934900005,
+      "estimated_pnl": 2793,
+      "risk_level": "MEDIUM",
+      "performance": {
+        "overall_duration_ms": 11250,
+        "validation_ms": 2079,
+        "pricing_ms": 2037,
+        "risk_assessment_ms": 5071,
+        "execution_ms": 2049
+      }
+    }
+  }
+}
+
+
+
+# Bug triggered
+curl -X POST http://localhost:8000/orders -H "Content-Type: application/json" \
+  -d '{"symbol": "NVDA", "quantity": 250, "order_type": "SELL"}'
+# Commission: ~2.5%! (2% extra fee bug)
+
+
+output:
+
+{
+  "order_id": "b7ca527f-04e4-4873-86ee-196f0dbae42e",
+  "status": "EXECUTED",
+  "message": "Order executed successfully: SELL 250 NVDA @ $490.6",
+  "trace_id": "0ddd9d18-857b-4747-b1bc-56d88f2be437",
+  "latency_ms": 11273,
+  "details": {
+    "performance": {
+      "total_duration_ms": 11273,
+      "breakdown": {
+        "validation_ms": 2062,
+        "pricing_ms": 2075,
+        "risk_assessment_ms": 5081,
+        "execution_ms": 2038
+      }
+    },
+    "execution_flow": {
+      "validation": {
+        "status": "passed",
+        "normalized_quantity": 250,
+        "duration_ms": 2062,
+        "timestamp": "2025-12-19T21:28:25.888296"
+      },
+      "pricing_calculation": {
+        "price_per_share": 490.6,
+        "total_cost": 119581.211145,
+        "estimated_pnl": 3900,
+        "duration_ms": 2075,
+        "timestamp": "2025-12-19T21:28:27.978272"
+      },
+      "risk_assessment": {
+        "risk_level": "MEDIUM",
+        "risk_score": 65,
+        "approved": true,
+        "risk_factors": {
+          "position_size_risk": 30,
+          "position_value": 122650,
+          "position_risk_logic": "position_value $122650.00 → 30 points",
+          "pnl_risk": 5,
+          "estimated_pnl": 3900,
+          "pnl_risk_logic": "pnl $3900.00 → 5 points",
+          "quantity_risk": 15,
+          "quantity": 250,
+          "quantity_risk_logic": "quantity 250 → 15 points",
+          "volatility_risk": 15,
+          "symbol": "NVDA",
+          "volatility_risk_logic": "symbol NVDA → 15 points (volatile=True)",
+          "total_risk_score": 65
+        },
+        "duration_ms": 5081,
+        "timestamp": "2025-12-19T21:28:33.065794"
+      },
+      "execution": {
+        "status": "EXECUTED",
+        "duration_ms": 2038,
+        "execution_time": "2025-12-19T21:28:35.108005"
+      }
+    },
+    "summary": {
+      "symbol": "NVDA",
+      "order_type": "SELL",
+      "quantity": 250,
+      "price": 490.6,
+      "total_cost": 119581.211145,
+      "estimated_pnl": 3900,
+      "risk_level": "MEDIUM",
+      "performance": {
+        "overall_duration_ms": 11273,
+        "validation_ms": 2062,
+        "pricing_ms": 2075,
+        "risk_assessment_ms": 5081,
+        "execution_ms": 2038
+      }
+    }
+  }
+}
+
+
+
+
+Scenario 2: "Order passed validation but failed execution!"
+
+# Price variance + stale validation price
+curl -X POST http://localhost:8000/orders -H "Content-Type: application/json" \
+  -d '{"symbol": "AAPL", "quantity": 2850, "order_type": "BUY"}'
+# Validation uses $175: 2850×$175=$498,750 (PASS)
+# Execution uses $177: 2850×$177=$504,450 (MIGHT FAIL!)
+
+output:  "message": "Order failed at risk assessment: Risk assessment failed: 403: Compliance validation failed: Order value $508383.00 exceeds single trade limit of $500,000",
+{
+  "order_id": "43f7569c-8a51-4b56-828d-6cd6c346dd44",
+  "status": "FAILED",
+  "message": "Order failed at risk assessment: Risk assessment failed: 403: Compliance validation failed: Order value $508383.00 exceeds single trade limit of $500,000",
+  "trace_id": "23e0a939-b00a-4d66-878b-0963bd6e9ae1",
+  "latency_ms": 6187,
+  "details": {
+    "performance": {
+      "total_duration_ms": 6187,
+      "failure_at_stage": "risk_assessment"
+    },
+    "execution_flow": {
+      "validation": {
+        "status": "passed",
+        "normalized_quantity": 2850,
+        "duration_ms": 2049,
+        "timestamp": "2025-12-19T21:26:13.990358"
+      },
+      "pricing_calculation": {
+        "price_per_share": 178.38,
+        "total_cost": 510953.415,
+        "estimated_pnl": -38133,
+        "duration_ms": 2074,
+        "timestamp": "2025-12-19T21:26:16.080327"
+      },
+      "failure": {
+        "stage": "risk_assessment",
+        "message": "Risk assessment failed: 403: Compliance validation failed: Order value $508383.00 exceeds single trade limit of $500,000",
+        "status_code": 500
+      }
+    }
+  }
+}
+
+
+
+
+Scenario 3: "Tech stock orders take 3 seconds longer!"
+
+# Fast
+curl -X POST http://localhost:8000/orders -H "Content-Type: application/json" \
+  -d '{"symbol": "TSLA", "quantity": 50, "order_type": "BUY"}'
+# Fast (TSLA is Automotive, not Tech)
+
+# Slow (3 second delay)
+curl -X POST http://localhost:8000/orders -H "Content-Type: application/json" \
+  -d '{"symbol": "NVDA", "quantity": 50, "order_type": "BUY"}'
+# Has 3s delay in risk assessment
+
+
+TSLA: "latency_ms": 8221,
+
+output:
+{
+  "order_id": "b18e313c-aaf2-4b3a-9ab8-7e7d3a0b49ba",
+  "status": "EXECUTED",
+  "message": "Order executed successfully: BUY 50 TSLA @ $244.61",
+  "trace_id": "d215a3ed-de9f-4753-b6df-40ad2883cec5",
+  "latency_ms": 8221,
+  "details": {
+    "performance": {
+      "total_duration_ms": 8221,
+      "breakdown": {
+        "validation_ms": 2064,
+        "pricing_ms": 2048,
+        "risk_assessment_ms": 2039,
+        "execution_ms": 2051
+      }
+    },
+    "execution_flow": {
+      "validation": {
+        "status": "passed",
+        "normalized_quantity": 50,
+        "duration_ms": 2064,
+        "timestamp": "2025-12-19T21:29:26.662298"
+      },
+      "pricing_calculation": {
+        "price_per_share": 244.61,
+        "total_cost": 12292.1525,
+        "estimated_pnl": -730.5,
+        "duration_ms": 2048,
+        "timestamp": "2025-12-19T21:29:28.725006"
+      },
+      "risk_assessment": {
+        "risk_level": "MEDIUM",
+        "risk_score": 45,
+        "approved": true,
+        "risk_factors": {
+          "position_size_risk": 10,
+          "position_value": 12230.5,
+          "position_risk_logic": "position_value $12230.50 → 10 points",
+          "pnl_risk": 10,
+          "estimated_pnl": -730.5,
+          "pnl_risk_logic": "pnl $-730.50 → 10 points",
+          "quantity_risk": 5,
+          "quantity": 50,
+          "quantity_risk_logic": "quantity 50 → 5 points",
+          "volatility_risk": 20,
+          "symbol": "TSLA",
+          "volatility_risk_logic": "symbol TSLA → 20 points (volatile=True)",
+          "total_risk_score": 45
+        },
+        "duration_ms": 2039,
+        "timestamp": "2025-12-19T21:29:30.770324"
+      },
+      "execution": {
+        "status": "EXECUTED",
+        "duration_ms": 2051,
+        "execution_time": "2025-12-19T21:29:32.825593"
+      }
+    },
+    "summary": {
+      "symbol": "TSLA",
+      "order_type": "BUY",
+      "quantity": 50,
+      "price": 244.61,
+      "total_cost": 12292.1525,
+      "estimated_pnl": -730.5,
+      "risk_level": "MEDIUM",
+      "performance": {
+        "overall_duration_ms": 8221,
+        "validation_ms": 2064,
+        "pricing_ms": 2048,
+        "risk_assessment_ms": 2039,
+        "execution_ms": 2051
+      }
+    }
+  }
+}
+
+
+
+NVDA: "latency_ms": 11279,
+
+{
+  "order_id": "afc3bbcf-72b9-415b-94de-abf987050ac9",
+  "status": "EXECUTED",
+  "message": "Order executed successfully: BUY 50 NVDA @ $496.11",
+  "trace_id": "bd776247-439a-4c9f-b0e4-fe2092375516",
+  "latency_ms": 11279,
+  "details": {
+    "performance": {
+      "total_duration_ms": 11279,
+      "breakdown": {
+        "validation_ms": 2063,
+        "pricing_ms": 2062,
+        "risk_assessment_ms": 5105,
+        "execution_ms": 2031
+      }
+    },
+    "execution_flow": {
+      "validation": {
+        "status": "passed",
+        "normalized_quantity": 50,
+        "duration_ms": 2063,
+        "timestamp": "2025-12-19T21:30:08.569144"
+      },
+      "pricing_calculation": {
+        "price_per_share": 496.11,
+        "total_cost": 24930.0275,
+        "estimated_pnl": -1055.5,
+        "duration_ms": 2062,
+        "timestamp": "2025-12-19T21:30:10.653119"
+      },
+      "risk_assessment": {
+        "risk_level": "MEDIUM",
+        "risk_score": 50,
+        "approved": true,
+        "risk_factors": {
+          "position_size_risk": 10,
+          "position_value": 24805.5,
+          "position_risk_logic": "position_value $24805.50 → 10 points",
+          "pnl_risk": 20,
+          "estimated_pnl": -1055.5,
+          "pnl_risk_logic": "pnl $-1055.50 → 20 points",
+          "quantity_risk": 5,
+          "quantity": 50,
+          "quantity_risk_logic": "quantity 50 → 5 points",
+          "volatility_risk": 15,
+          "symbol": "NVDA",
+          "volatility_risk_logic": "symbol NVDA → 15 points (volatile=True)",
+          "total_risk_score": 50
+        },
+        "duration_ms": 5105,
+        "timestamp": "2025-12-19T21:30:15.758692"
+      },
+      "execution": {
+        "status": "EXECUTED",
+        "duration_ms": 2031,
+        "execution_time": "2025-12-19T21:30:17.798689"
+      }
+    },
+    "summary": {
+      "symbol": "NVDA",
+      "order_type": "BUY",
+      "quantity": 50,
+      "price": 496.11,
+      "total_cost": 24930.0275,
+      "estimated_pnl": -1055.5,
+      "risk_level": "MEDIUM",
+      "performance": {
+        "overall_duration_ms": 11279,
+        "validation_ms": 2063,
+        "pricing_ms": 2062,
+        "risk_assessment_ms": 5105,
+        "execution_ms": 2031
+      }
+    }
+  }
+}
+
+
+Scenario 4: "Risk score jumped from 35 to 45 by adding 1 share!"
+
+# qty=100
+curl -X POST http://localhost:8000/orders -H "Content-Type: application/json" \
+  -d '{"symbol": "AAPL", "quantity": 100, "order_type": "BUY"}'
+# quantity_risk: 5 points
+
+# qty=101  
+curl -X POST http://localhost:8000/orders -H "Content-Type: application/json" \
+  -d '{"symbol": "AAPL", "quantity": 101, "order_type": "BUY"}'
+# quantity_risk: 10 points (off-by-one bug!)
+
+
+
+
+- just by adding one more share to buy the risk factor got reduced by 5 points??
+
+input: {"symbol": "AAPL", "quantity": 100, "order_type": "BUY"}
+
+{
+  "order_id": "7d862dda-7455-4a51-ac83-6bc8e9a0c7b7",
+  "status": "EXECUTED",
+  "message": "Order executed successfully: BUY 100 AAPL @ $173.27",
+  "trace_id": "9049baa0-1bd1-49d1-bc73-3c6da5dce613",
+  "latency_ms": 11225,
+  "details": {
+    "performance": {
+      "total_duration_ms": 11225,
+      "breakdown": {
+        "validation_ms": 2040,
+        "pricing_ms": 2080,
+        "risk_assessment_ms": 5044,
+        "execution_ms": 2038
+      }
+    },
+    "execution_flow": {
+      "validation": {
+        "status": "passed",
+        "normalized_quantity": 100,
+        "duration_ms": 2040,
+        "timestamp": "2025-12-19T21:31:17.805521"
+      },
+      "pricing_calculation": {
+        "price_per_share": 173.27,
+        "total_cost": 17414.635,
+        "estimated_pnl": -827,
+        "duration_ms": 2080,
+        "timestamp": "2025-12-19T21:31:19.891325"
+      },
+      "risk_assessment": {
+        "risk_level": "LOW",
+        "risk_score": 30,
+        "approved": true,
+        "risk_factors": {
+          "position_size_risk": 10,
+          "position_value": 17327,
+          "position_risk_logic": "position_value $17327.00 → 10 points",
+          "pnl_risk": 10,
+          "estimated_pnl": -827,
+          "pnl_risk_logic": "pnl $-827.00 → 10 points",
+          "quantity_risk": 5,
+          "quantity": 100,
+          "quantity_risk_logic": "quantity 100 → 5 points",
+          "volatility_risk": 5,
+          "symbol": "AAPL",
+          "volatility_risk_logic": "symbol AAPL → 5 points (volatile=False)",
+          "total_risk_score": 30
+        },
+        "duration_ms": 5044,
+        "timestamp": "2025-12-19T21:31:24.945450"
+      },
+      "execution": {
+        "status": "EXECUTED",
+        "duration_ms": 2038,
+        "execution_time": "2025-12-19T21:31:26.988435"
+      }
+    },
+    "summary": {
+      "symbol": "AAPL",
+      "order_type": "BUY",
+      "quantity": 100,
+      "price": 173.27,
+      "total_cost": 17414.635,
+      "estimated_pnl": -827,
+      "risk_level": "LOW",
+      "performance": {
+        "overall_duration_ms": 11225,
+        "validation_ms": 2040,
+        "pricing_ms": 2080,
+        "risk_assessment_ms": 5044,
+        "execution_ms": 2038
+      }
+    }
+  }
+}
+
+
+
+input: {"symbol": "AAPL", "quantity": 101, "order_type": "BUY"}
+{
+  "order_id": "fe895b8d-502c-4030-bdc7-1e2a0dd09fdf",
+  "status": "EXECUTED",
+  "message": "Order executed successfully: BUY 101 AAPL @ $177.4",
+  "trace_id": "7a8656b5-4618-479e-be89-101af83f4eca",
+  "latency_ms": 11267,
+  "details": {
+    "performance": {
+      "total_duration_ms": 11267,
+      "breakdown": {
+        "validation_ms": 2070,
+        "pricing_ms": 2059,
+        "risk_assessment_ms": 5062,
+        "execution_ms": 2060
+      }
+    },
+    "execution_flow": {
+      "validation": {
+        "status": "passed",
+        "normalized_quantity": 101,
+        "duration_ms": 2070,
+        "timestamp": "2025-12-19T21:31:46.798258"
+      },
+      "pricing_calculation": {
+        "price_per_share": 177.4,
+        "total_cost": 18007.997,
+        "estimated_pnl": -1252.4,
+        "duration_ms": 2059,
+        "timestamp": "2025-12-19T21:31:48.868279"
+      },
+      "risk_assessment": {
+        "risk_level": "MEDIUM",
+        "risk_score": 45,
+        "approved": true,
+        "risk_factors": {
+          "position_size_risk": 10,
+          "position_value": 17917.4,
+          "position_risk_logic": "position_value $17917.40 → 10 points",
+          "pnl_risk": 20,
+          "estimated_pnl": -1252.4,
+          "pnl_risk_logic": "pnl $-1252.40 → 20 points",
+          "quantity_risk": 10,
+          "quantity": 101,
+          "quantity_risk_logic": "quantity 101 → 10 points",
+          "volatility_risk": 5,
+          "symbol": "AAPL",
+          "volatility_risk_logic": "symbol AAPL → 5 points (volatile=False)",
+          "total_risk_score": 45
+        },
+        "duration_ms": 5062,
+        "timestamp": "2025-12-19T21:31:53.935978"
+      },
+      "execution": {
+        "status": "EXECUTED",
+        "duration_ms": 2060,
+        "execution_time": "2025-12-19T21:31:55.994759"
+      }
+    },
+    "summary": {
+      "symbol": "AAPL",
+      "order_type": "BUY",
+      "quantity": 101,
+      "price": 177.4,
+      "total_cost": 18007.997,
+      "estimated_pnl": -1252.4,
+      "risk_level": "MEDIUM",
+      "performance": {
+        "overall_duration_ms": 11267,
+        "validation_ms": 2070,
+        "pricing_ms": 2059,
+        "risk_assessment_ms": 5062,
+        "execution_ms": 2060
+      }
+    }
+  }
+}
+
+
+
+
+
+{
+  "order_id": "d30c3626-07a4-4d35-ab84-13be63414dd7",
+  "status": "FAILED",
+  "message": "Order failed at risk assessment: Service call failed: http://localhost:8003/risk/assess",
+  "trace_id": "32310136-35b5-4ec2-aace-1a3b518fd4a6",
+  "latency_ms": 8234,
+  "details": {
+    "performance": {
+      "total_duration_ms": 8234,
+      "failure_at_stage": "risk_assessment"
+    },
+    "execution_flow": {
+      "validation": {
+        "status": "passed",
+        "normalized_quantity": 101,
+        "duration_ms": 2113,
+        "timestamp": "2025-12-19T21:34:15.934009"
+      },
+      "pricing_calculation": {
+        "price_per_share": 178.35,
+        "total_cost": 18104.42675,
+        "estimated_pnl": -1348.35,
+        "duration_ms": 2054,
+        "timestamp": "2025-12-19T21:34:18.007748"
+      },
+      "failure": {
+        "stage": "risk_assessment",
+        "message": "Service call failed: http://localhost:8003/risk/assess",
+        "status_code": 500
+      }
+    }
+  }
+}
+
+
+
+
+
+
+
+
+
+

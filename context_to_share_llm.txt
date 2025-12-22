@@ -1,0 +1,18 @@
+
+# Code
+
+SELECT * FROM dbo.CodeNodes;
+
+# Logs
+SELECT * FROM LogEvents
+WHERE traceId = '15248ca8-e2c3-4928-9c48-9a04046eeb40';
+
+# Find all relationships connected to nodes involved in a specific trace event
+
+SELECT * FROM Relationships
+WHERE $from_id IN (
+    SELECT $node_id FROM LogEvents WHERE traceId = '15248ca8-e2c3-4928-9c48-9a04046eeb40'
+)
+OR $to_id IN (
+    SELECT $node_id FROM LogEvents WHERE traceId = '15248ca8-e2c3-4928-9c48-9a04046eeb40'
+);

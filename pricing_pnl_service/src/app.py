@@ -25,6 +25,9 @@ class JsonFormatter(logging.Formatter):
             log_data["order_id"] = record.order_id
         if hasattr(record, 'extra_data'):
             log_data.update(record.extra_data)
+        # Include stack trace if exception info is present
+        if record.exc_info:
+            log_data["exception"] = self.formatException(record.exc_info)
         return json.dumps(log_data)
 
 # Configure logging
@@ -418,11 +421,11 @@ def calculate_pricing(request_data: PricingRequest, request: Request):
         # Re-raise HTTPException without logging as unexpected error
         raise
     except Exception as e:
-        logger.error("[calculate_pnl] Unexpected error in pricing calculation", extra={
+        logger.exception("[calculate_pnl] Unexpected error in pricing calculation", extra={
             "trace_id": trace_id,
             "order_id": request_data.order_id,
             "function": "calculate_pnl",
-            "error": str(e)
+            "extra_data": {"error": str(e), "error_type": type(e).__name__}
         })
         raise HTTPException(status_code=500, detail=f"Pricing calculation failed: {str(e)}")
 
@@ -469,11 +472,11 @@ def get_current_price(symbol: str, request: Request):
             "timestamp": datetime.now().isoformat()
         }
     except Exception as e:
-        logger.error("[get_current_price] Error fetching price", extra={
+        logger.exception("[get_current_price] Error fetching price", extra={
             "trace_id": trace_id,
             "symbol": symbol,
             "function": "get_current_price",
-            "error": str(e)
+            "extra_data": {"error": str(e), "error_type": type(e).__name__}
         })
         raise HTTPException(status_code=500, detail="Unable to fetch price")
 

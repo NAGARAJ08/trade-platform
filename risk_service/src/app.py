@@ -5,6 +5,7 @@ import time
 from datetime import datetime
 from typing import Optional, Dict, Any
 from enum import Enum
+import time
 
 from fastapi import FastAPI, HTTPException, Header, Request
 from pydantic import BaseModel, Field
@@ -25,6 +26,9 @@ class JsonFormatter(logging.Formatter):
             log_data["order_id"] = record.order_id
         if hasattr(record, 'extra_data'):
             log_data.update(record.extra_data)
+        # Include stack trace if exception info is present
+        if record.exc_info:
+            log_data["exception"] = self.formatException(record.exc_info)
         return json.dumps(log_data)
 
 # Configure logging
@@ -198,9 +202,11 @@ def check_sector_limits(symbol: str, trace_id: str, order_id: str) -> tuple[bool
     if sector == "Technology" and current_tech_exposure > 0.40:
         logger.warning(f"[check_sector_limits] Technology sector exposure high: {current_tech_exposure*100:.1f}%, running deep compliance check...", 
                       extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'check_sector_limits'})
+        compliance_start = time.time()
         time.sleep(3)  # Simulating slow compliance database query
-        logger.info(f"[check_sector_limits] Deep compliance check completed", 
-                   extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'check_sector_limits'})
+        compliance_duration_ms = int((time.time() - compliance_start) * 1000)
+        logger.info(f"[check_sector_limits] Deep compliance check completed in {compliance_duration_ms}ms", 
+                   extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'check_sector_limits', 'extra_data': {'duration_ms': compliance_duration_ms, 'sector': sector, 'exposure': current_tech_exposure}})
         # Don't block, just warn
     
     logger.info(f"[check_sector_limits] Sector check passed for {symbol} (Sector: {sector})", 
@@ -522,11 +528,11 @@ def assess_risk(request_data: RiskAssessmentRequest, request: Request):
         )
         
     except Exception as e:
-        logger.error("[assess_risk] Unexpected error in risk assessment", extra={
+        logger.exception("[assess_risk] Unexpected error in risk assessment", extra={
             "trace_id": trace_id,
             "order_id": request_data.order_id,
             "function": "assess_risk",
-            "error": str(e)
+            "extra_data": {"error": str(e), "error_type": type(e).__name__}
         })
         raise HTTPException(status_code=500, detail=f"Risk assessment failed: {str(e)}")
 
