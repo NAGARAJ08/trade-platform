@@ -216,3 +216,26 @@ Each function in the order flow performs a key business logic step:
 
 ---
 
+### 10. Why do both BUY and SELL orders fail for GME with market data error?
+- **Inputs:**
+```json
+{
+  "symbol": "GME",
+  "quantity": 100,
+  "order_type": "BUY"
+}
+```
+```json
+{
+  "symbol": "GME",
+  "quantity": 50,
+  "order_type": "SELL"
+}
+```
+- **Expected Output:** Both orders fail with 503 error "Market data feed unavailable"
+- **Key Function:** `validate_market_data_feed()` in pricing_pnl_service (COMMON to both BUY and SELL)
+- **RCA Goal:** Identify that both workflows fail at the same shared component
+- **Trace Pattern:** Both traces show error in `validate_market_data_feed` with `error_type: market_data_unavailable`
+
+---
+

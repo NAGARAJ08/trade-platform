@@ -141,6 +141,45 @@ Data Inconsistencies:
 
 
 
+Scenario 10: "Both BUY and SELL orders fail for GME - market data issue?"
+User Question:
+
+"I'm trying to both BUY and SELL GME but both orders are failing with 'Market data feed unavailable'. This happens for GME and AMC only. Other symbols work fine. What's going on?"
+
+Expected Behavior:
+- This tests a COMMON FUNCTION (validate_market_data_feed) that is called by BOTH BUY and SELL workflows
+- The function fails for restricted symbols (GME, AMC) regardless of order type
+- RCA agent should be able to isolate that both workflows fail at the same common component
+- Error appears in pricing_pnl_service logs with function name 'validate_market_data_feed'
+
+# Test BUY GME - should fail at common function
+curl -X POST http://localhost:8000/orders -H "Content-Type: application/json" \
+  -d '{"symbol": "GME", "quantity": 100, "order_type": "BUY"}'
+# Expected: 503 error "Market data feed unavailable for symbol 'GME'"
+
+# Test SELL GME - should fail at same common function  
+curl -X POST http://localhost:8000/orders -H "Content-Type: application/json" \
+  -d '{"symbol": "GME", "quantity": 50, "order_type": "SELL"}'
+# Expected: 503 error "Market data feed unavailable for symbol 'GME'"
+
+# Test BUY AMC - should also fail
+curl -X POST http://localhost:8000/orders -H "Content-Type: application/json" \
+  -d '{"symbol": "AMC", "quantity": 200, "order_type": "BUY"}'
+# Expected: 503 error "Market data feed unavailable for symbol 'AMC'"
+
+# Test normal symbol - should work
+curl -X POST http://localhost:8000/orders -H "Content-Type: application/json" \
+  -d '{"symbol": "AAPL", "quantity": 100, "order_type": "BUY"}'
+# Expected: Success
+
+RCA Investigation Points:
+1. Both BUY and SELL flows call validate_market_data_feed() in pricing_pnl_service
+2. Function logs: "validate_market_data_feed" with "error_type": "market_data_unavailable"
+3. Error occurs before get_market_price() is even called
+4. Same function, same error for both order types - clear common component failure
+5. Agent should trace: orchestrator → pricing_pnl_service → validate_market_data_feed → FAIL
+
+
 Services Enhanced! Here's What Changed:
 ✅ Bug #1: Pricing Fee Bug (NOW TESTABLE!)
 Fixed Holdings: NVDA: 100→300, TSLA: 150→300

@@ -178,7 +178,7 @@ def validate_account_balance(quantity: int, price: float, symbol: str, order_typ
             return False, f"Insufficient buying power: ${required_amount:.2f} required, ${account_balance:.2f} available"
     else:
         # Check holdings for sale
-        holdings = {"AAPL": 500, "GOOGL": 200, "MSFT": 800, "TSLA": 300, "NVDA": 300}
+        holdings = {"AAPL": 500, "GOOGL": 200, "MSFT": 800, "TSLA": 300, "NVDA": 300, "GME": 500, "AMC": 500}
         current_holdings = holdings.get(symbol, 0)
         
         logger.info(f"[validate_account_balance] SELL - Current holdings: {current_holdings} shares of {symbol}", 
@@ -255,7 +255,9 @@ def get_symbol_metadata(symbol: str) -> Optional[Dict[str, Any]]:
         "AMZN": {"exchange": "NASDAQ", "sector": "Consumer", "lot_size": 10, "max_order": 5000},
         "TSLA": {"exchange": "NASDAQ", "sector": "Automotive", "lot_size": 10, "max_order": 3000},
         "META": {"exchange": "NASDAQ", "sector": "Technology", "lot_size": 15, "max_order": 5000},
-        "NVDA": {"exchange": "NASDAQ", "sector": "Technology", "lot_size": 20, "max_order": 5000}
+        "NVDA": {"exchange": "NASDAQ", "sector": "Technology", "lot_size": 20, "max_order": 5000},
+        "GME": {"exchange": "NYSE", "sector": "Consumer", "lot_size": 1, "max_order": 5000},
+        "AMC": {"exchange": "NYSE", "sector": "Entertainment", "lot_size": 1, "max_order": 5000}
     }
     return symbol_registry.get(symbol)
 

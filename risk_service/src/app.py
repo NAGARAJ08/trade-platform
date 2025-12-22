@@ -214,18 +214,18 @@ def check_portfolio_concentration(symbol: str, quantity: int, price: float, trac
     concentration_risk = 0
     if concentration > 10:
         concentration_risk = 20
-        logger.warning(f"[check_portfolio_concentration] High concentration: {concentration:.1f}% of portfolio", 
+        logger.warning(f"[check_portfolio_concentration] High concentration: {concentration:.3f}% of portfolio", 
                       extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'check_portfolio_concentration'})
     elif concentration > 5:
         concentration_risk = 10
     else:
         concentration_risk = 0
     
-    logger.info(f"[check_portfolio_concentration] Concentration risk: {concentration_risk} points ({concentration:.1f}% of portfolio)", 
+    logger.info(f"[check_portfolio_concentration] Concentration risk: {concentration_risk} points ({concentration:.3f}% of portfolio)", 
                extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'check_portfolio_concentration', 
-                      'extra_data': {'concentration_pct': concentration, 'risk_points': concentration_risk}})
+                      'extra_data': {'concentration_pct': round(concentration, 3), 'risk_points': concentration_risk}})
     
-    return concentration_risk, {'concentration_pct': concentration, 'position_value': position_value}
+    return concentration_risk, {'concentration_pct': round(concentration, 3), 'position_value': round(position_value, 3)}
 
 
 def check_sector_limits(symbol: str, trace_id: str, order_id: str) -> tuple[bool, Optional[str]]:
@@ -381,8 +381,8 @@ def calculate_risk_score(
     
     risk_score += position_risk
     risk_factors["position_size_risk"] = position_risk
-    risk_factors["position_value"] = position_value
-    risk_factors["position_risk_logic"] = f"position_value ${position_value:.2f} → {position_risk} points"
+    risk_factors["position_value"] = round(position_value, 3)
+    risk_factors["position_risk_logic"] = f"position_value ${position_value:.3f} → {position_risk} points"
     
     # Factor 2: PnL risk (0-30 points)
     # Negative PnL or large PnL values are riskier
@@ -399,8 +399,8 @@ def calculate_risk_score(
     
     risk_score += pnl_risk
     risk_factors["pnl_risk"] = pnl_risk
-    risk_factors["estimated_pnl"] = pnl
-    risk_factors["pnl_risk_logic"] = f"pnl ${pnl:.2f} → {pnl_risk} points"
+    risk_factors["estimated_pnl"] = round(pnl, 3)
+    risk_factors["pnl_risk_logic"] = f"pnl ${pnl:.3f} → {pnl_risk} points"
     
     # Factor 3: Quantity risk (0-20 points)
     # Larger quantities carry higher execution risk
@@ -427,7 +427,7 @@ def calculate_risk_score(
     risk_factors["volatility_risk"] = volatility_risk
     risk_factors["symbol"] = symbol
     risk_factors["volatility_risk_logic"] = f"symbol {symbol} → {volatility_risk} points (volatile={symbol in volatile_symbols})"
-    risk_factors["total_risk_score"] = risk_score
+    risk_factors["total_risk_score"] = round(risk_score, 3)
     
     return risk_score, risk_factors
 

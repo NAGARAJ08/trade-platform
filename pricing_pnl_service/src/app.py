@@ -103,25 +103,44 @@ def get_trace_id(x_trace_id: Optional[str] = Header(None)) -> str:
     return x_trace_id or str(uuid.uuid4())
 
 
-def get_market_price(symbol: str, scenario: Optional[str] = None) -> float:
+def get_market_price(symbol: str, order_type: Optional[OrderType] = None, trace_id: Optional[str] = None, order_id: Optional[str] = None) -> float:
     """
     Retrieve current market price for a trading symbol with simulated variance.
+    COMMON FUNCTION used by both BUY and SELL workflows.
     
     Args:
         symbol: Stock ticker symbol (e.g., 'AAPL', 'NVDA')
-        scenario: Optional scenario identifier (reserved for future use)
+        order_type: BUY or SELL (optional, for logging)
+        trace_id: Trace ID for logging (optional)
+        order_id: Order ID for logging (optional)
     
     Returns:
         float: Current market price rounded to 2 decimal places
     
     Raises:
+        HTTPException: If market data feed is unavailable or symbol is restricted
         ValueError: If symbol is not found in supported symbols list
     
     Note:
+        - This is a COMMON FUNCTION called by both BUY and SELL flows
+        - Validates market data feed availability before price lookup
         - Applies ±2% random variance to base price for realistic market simulation
         - Simulates real-time price fluctuations between service calls
-        - Used for both validation and execution pricing
+        - Errors here will appear in logs for both workflow types
     """
+    # Market data feed validation for restricted symbols
+    restricted_symbols = {"GME", "AMC"}  # Symbols with market data issues
+    
+    if symbol in restricted_symbols:
+        if trace_id and order_id:
+            logger.error(f"[get_market_price] MARKET DATA FEED UNAVAILABLE - Symbol {symbol} currently experiencing data feed issues",
+                        extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'get_market_price',
+                               'extra_data': {'symbol': symbol, 'order_type': order_type.value if order_type else None, 'error_type': 'market_data_unavailable'}})
+        raise HTTPException(
+            status_code=503,
+            detail=f"Market data feed unavailable for symbol '{symbol}'. Unable to retrieve real-time pricing. Please try again later or contact support if issue persists."
+        )
+    
     base_prices = {
         "AAPL": 175.50,
         "GOOGL": 140.25,
@@ -451,9 +470,10 @@ def calculate_pricing(request_data: PricingRequest, request: Request):
     })
     
     try:
-        # Get market price
-        logger.info(f"[calculate_pnl] get_market_price for symbol: {request_data.symbol}", extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'function': 'get_market_price'})
-        current_price = get_market_price(request_data.symbol)
+        # Get market price (includes market data feed validation - COMMON FUNCTION for BUY & SELL)
+        logger.info(f"[calculate_pricing] Fetching market price for {request_data.symbol}",
+                   extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'function': 'calculate_pricing'})
+        current_price = get_market_price(request_data.symbol, request_data.order_type, trace_id, request_data.order_id)
         
         logger.info(f"[get_market_price] Market price retrieved: ${current_price}", extra={
             "trace_id": trace_id,
