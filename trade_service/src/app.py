@@ -249,13 +249,13 @@ def get_symbol_metadata(symbol: str) -> Optional[Dict[str, Any]]:
         {'exchange': 'NASDAQ', 'sector': 'Technology', 'lot_size': 1, 'max_order': 10000}
     """
     symbol_registry = {
-        "AAPL": {"exchange": "NASDAQ", "sector": "Technology", "lot_size": 1, "max_order": 10000},
-        "GOOGL": {"exchange": "NASDAQ", "sector": "Technology", "lot_size": 1, "max_order": 5000},
-        "MSFT": {"exchange": "NASDAQ", "sector": "Technology", "lot_size": 1, "max_order": 10000},
-        "AMZN": {"exchange": "NASDAQ", "sector": "Consumer", "lot_size": 1, "max_order": 5000},
-        "TSLA": {"exchange": "NASDAQ", "sector": "Automotive", "lot_size": 1, "max_order": 3000},
-        "META": {"exchange": "NASDAQ", "sector": "Technology", "lot_size": 1, "max_order": 5000},
-        "NVDA": {"exchange": "NASDAQ", "sector": "Technology", "lot_size": 1, "max_order": 5000}
+        "AAPL": {"exchange": "NASDAQ", "sector": "Technology", "lot_size": 100, "max_order": 10000},
+        "GOOGL": {"exchange": "NASDAQ", "sector": "Technology", "lot_size": 25, "max_order": 5000},
+        "MSFT": {"exchange": "NASDAQ", "sector": "Technology", "lot_size": 125, "max_order": 10000},
+        "AMZN": {"exchange": "NASDAQ", "sector": "Consumer", "lot_size": 10, "max_order": 5000},
+        "TSLA": {"exchange": "NASDAQ", "sector": "Automotive", "lot_size": 10, "max_order": 3000},
+        "META": {"exchange": "NASDAQ", "sector": "Technology", "lot_size": 15, "max_order": 5000},
+        "NVDA": {"exchange": "NASDAQ", "sector": "Technology", "lot_size": 20, "max_order": 5000}
     }
     return symbol_registry.get(symbol)
 
