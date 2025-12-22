@@ -1,5 +1,4 @@
-# Trade Platform - FastAPI Microservices Demo
-
+# Trade Platform 
 A simple trading platform with 4 microservices demonstrating order processing with detailed JSON logging.
 
 ## Services
@@ -93,12 +92,10 @@ Each function in the order flow performs a key business logic step:
 - **get_recommendation**: Generates a human-readable risk recommendation for the order.
 - **execute_trade**: Finalizes the order and records execution details.
 
-See the flow diagram below for how these functions interact during order processing.
+---
+
 
 ## Test Scenarios (RCA Questions)
-
-Below are key test scenarios for the Trade Platform, written as RCA-style questions. Each scenario includes the question you would ask the RCA agent and the input JSON body for the API call to `/orders`.
-
 ### 1. Why are my large SELL orders so expensive?
 - **Inputs:**
 ```json
@@ -219,4 +216,3 @@ Below are key test scenarios for the Trade Platform, written as RCA-style questi
 
 ---
 
-To run these scenarios, use the provided `run_scenarios.py` script or manually POST the input JSON to `/orders` on the orchestrator service.
