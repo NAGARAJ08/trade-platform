@@ -116,8 +116,18 @@ def get_trace_id(x_trace_id: Optional[str] = Header(None)) -> str:
 
 def is_market_open() -> bool:
     """
-    Check if market is open
-    Market hours: 9:30 AM - 4:00 PM
+    Verify if trading market is currently open.
+    
+    Returns:
+        bool: True if current time is within market hours, False otherwise
+    
+    Market Hours:
+        - Opens: 9:30 AM local time
+        - Closes: 11:00 PM local time (extended for demo purposes)
+    
+    Note:
+        Uses local system time. Production systems should use
+        exchange-specific timezone (typically US/Eastern)
     """
     current_time = datetime.now().time()
     market_open = time(9, 30)
@@ -127,7 +137,29 @@ def is_market_open() -> bool:
 
 
 def validate_account_balance(quantity: int, price: float, symbol: str, order_type: OrderType, trace_id: str, order_id: str) -> tuple[bool, Optional[str]]:
-    """Validate account has sufficient balance/holdings based on order type"""
+    """
+    Verify sufficient funds (BUY) or holdings (SELL) for order execution.
+    
+    Args:
+        quantity: Number of shares to trade
+        price: Estimated price per share
+        symbol: Stock ticker symbol
+        order_type: BUY or SELL
+        trace_id: Trace ID for logging
+        order_id: Order ID for logging
+    
+    Returns:
+        tuple: (is_valid, error_message)
+            - is_valid: True if sufficient balance/holdings, False otherwise
+            - error_message: None if valid, error description if not
+    
+    Validation Logic:
+        BUY: Checks if (quantity × price) ≤ account balance ($500K)
+        SELL: Checks if quantity ≤ current holdings for the symbol
+    
+    Note:
+        Uses estimated price for validation. Actual price may differ at execution
+    """
     logger.info(f"[validate_account_balance] Validating account for {order_type} order", 
                extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'validate_account_balance'})
     
@@ -164,7 +196,26 @@ def validate_account_balance(quantity: int, price: float, symbol: str, order_typ
 
 
 def validate_order_requirements(symbol: str, quantity: int, price: float, order_type: OrderType, trace_id: str, order_id: str) -> tuple[bool, Optional[str]]:
-    """Validate order-type specific requirements"""
+    """
+    Validate all order-type specific requirements.
+    
+    Args:
+        symbol: Stock ticker symbol
+        quantity: Number of shares
+        price: Estimated price per share
+        order_type: BUY or SELL
+        trace_id: Trace ID for logging
+        order_id: Order ID for logging
+    
+    Returns:
+        tuple: (is_valid, error_message)
+            - is_valid: True if all requirements met, False otherwise
+            - error_message: None if valid, error description if not
+    
+    Validations Performed:
+        - Account balance/holdings verification
+        - Order-type specific business rules
+    """
     logger.info(f"[validate_order_requirements] Validating {order_type} order requirements", 
                extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'validate_order_requirements'})
     
@@ -179,7 +230,24 @@ def validate_order_requirements(symbol: str, quantity: int, price: float, order_
 
 
 def get_symbol_metadata(symbol: str) -> Optional[Dict[str, Any]]:
-    """Get metadata for a trading symbol"""
+    """
+    Retrieve trading metadata for a stock symbol.
+    
+    Args:
+        symbol: Stock ticker symbol
+    
+    Returns:
+        dict or None: Symbol metadata if found, None otherwise
+            Metadata includes:
+                - 'exchange': Trading exchange (e.g., 'NASDAQ')
+                - 'sector': Market sector
+                - 'lot_size': Minimum trading lot size
+                - 'max_order': Maximum order quantity allowed
+    
+    Example:
+        >>> get_symbol_metadata('AAPL')
+        {'exchange': 'NASDAQ', 'sector': 'Technology', 'lot_size': 1, 'max_order': 10000}
+    """
     symbol_registry = {
         "AAPL": {"exchange": "NASDAQ", "sector": "Technology", "lot_size": 1, "max_order": 10000},
         "GOOGL": {"exchange": "NASDAQ", "sector": "Technology", "lot_size": 1, "max_order": 5000},
@@ -193,7 +261,24 @@ def get_symbol_metadata(symbol: str) -> Optional[Dict[str, Any]]:
 
 
 def check_symbol_tradeable(symbol: str, trace_id: str, order_id: str) -> tuple[bool, Optional[str]]:
-    """Check if symbol is currently tradeable"""
+    """
+    Verify if a symbol is tradeable and registered in the system.
+    
+    Args:
+        symbol: Stock ticker symbol
+        trace_id: Trace ID for logging
+        order_id: Order ID for logging
+    
+    Returns:
+        tuple: (is_tradeable, error_message)
+            - is_tradeable: True if symbol is tradeable, False otherwise
+            - error_message: None if tradeable, error description if not
+    
+    Checks:
+        - Symbol exists in registry
+        - Exchange information available
+        - Trading is enabled for the symbol
+    """
     logger.info(f"[check_symbol_tradeable] Checking tradeability for {symbol}", 
                extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'check_symbol_tradeable'})
     
@@ -212,13 +297,44 @@ def check_symbol_tradeable(symbol: str, trace_id: str, order_id: str) -> tuple[b
 
 
 def validate_symbol(symbol: str) -> bool:
-    """Validate if symbol is supported"""
+    """
+    Check if symbol is in the list of supported trading symbols.
+    
+    Args:
+        symbol: Stock ticker symbol
+    
+    Returns:
+        bool: True if symbol is supported, False otherwise
+    
+    Supported Symbols:
+        AAPL, GOOGL, MSFT, AMZN, TSLA, META, NVDA
+    """
     supported_symbols = ["AAPL", "GOOGL", "MSFT", "AMZN", "TSLA", "META", "NVDA"]
     return symbol in supported_symbols
 
 
 def normalize_quantity_to_lot_size(quantity: int, symbol: str, trace_id: str, order_id: str) -> int:
-    """Normalize quantity to exchange lot size requirements"""
+    """
+    Adjust order quantity to meet exchange lot size requirements.
+    
+    Args:
+        quantity: Requested number of shares
+        symbol: Stock ticker symbol
+        trace_id: Trace ID for logging
+        order_id: Order ID for logging
+    
+    Returns:
+        int: Normalized quantity (rounded down to nearest lot size multiple)
+    
+    Example:
+        If lot_size = 10:
+        - Input: 157 → Output: 150
+        - Input: 100 → Output: 100 (no change)
+    
+    Note:
+        Rounds DOWN to nearest lot size. Fractional shares are not supported.
+        If symbol metadata unavailable, returns original quantity unchanged.
+    """
     logger.info(f"[normalize_quantity_to_lot_size] Normalizing quantity {quantity} for {symbol}", 
                extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'normalize_quantity_to_lot_size'})
     
@@ -240,7 +356,27 @@ def normalize_quantity_to_lot_size(quantity: int, symbol: str, trace_id: str, or
 
 
 def check_order_limits(quantity: int, symbol: str, trace_id: str, order_id: str) -> tuple[bool, Optional[str]]:
-    """Check if order quantity is within exchange limits"""
+    """
+    Validate order quantity against exchange and global limits.
+    
+    Args:
+        quantity: Number of shares to trade
+        symbol: Stock ticker symbol
+        trace_id: Trace ID for logging
+        order_id: Order ID for logging
+    
+    Returns:
+        tuple: (is_valid, error_message)
+            - is_valid: True if within limits, False otherwise
+            - error_message: None if valid, error description if exceeded
+    
+    Limits Checked:
+        1. Symbol-specific maximum (varies by symbol, typically 3K-10K shares)
+        2. Global maximum: 10,000 shares per order
+    
+    Note:
+        Global limit takes precedence if no symbol-specific metadata exists
+    """
     logger.info(f"[check_order_limits] Checking limits for {quantity} shares of {symbol}", 
                extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'check_order_limits'})
     
@@ -266,8 +402,20 @@ def check_order_limits(quantity: int, symbol: str, trace_id: str, order_id: str)
 
 def validate_quantity(quantity: int) -> int:
     """
-    Validate and normalize order quantity
-    Returns normalized quantity
+    Perform basic quantity validation and normalization.
+    
+    Args:
+        quantity: Requested order quantity
+    
+    Returns:
+        int: Validated quantity, or error codes:
+            - Returns quantity if valid (0 < quantity ≤ 10,000)
+            - Returns 0 if quantity < 0
+            - Returns -1 if quantity > 10,000 (exceeds maximum)
+    
+    Note:
+        This is a simple validation. Use check_order_limits() for
+        comprehensive limit checking with proper error messages.
     """
     if quantity < 0:
         return 0

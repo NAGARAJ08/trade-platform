@@ -78,7 +78,18 @@ class OrderResponse(BaseModel):
 
 
 def get_trace_id(x_trace_id: Optional[str] = Header(None)) -> str:
-    """Generate or use existing trace ID"""
+    """
+    Generate or retrieve trace ID for request tracking.
+    
+    Args:
+        x_trace_id: Optional trace ID from request header 'X-Trace-Id'
+    
+    Returns:
+        str: Existing trace ID from header or newly generated UUID
+    
+    Note:
+        Trace IDs enable end-to-end tracking of requests across all microservices
+    """
     return x_trace_id or str(uuid.uuid4())
 
 
@@ -92,7 +103,20 @@ class TraceFilter(logging.Filter):
         return hasattr(record, 'trace_id') and record.trace_id == self.trace_id
 
 def get_trace_logger(trace_id: str):
-    """Get or create a logger for specific trace_id"""
+    """
+    Get or create a trace-specific file logger for structured logging.
+    
+    Args:
+        trace_id: Unique trace identifier for the request
+    
+    Returns:
+        logging.Logger: Configured logger instance with trace-specific file handler
+    
+    Side Effects:
+        - Creates a new log file at '../logs/{trace_id}.log' if not exists
+        - Adds a TraceFilter to only log events matching this trace_id
+        - Configures JsonFormatter for structured JSON output
+    """
     if trace_id not in trace_handlers:
         trace_file_handler = logging.FileHandler(f'../logs/{trace_id}.log')
         trace_file_handler.setFormatter(JsonFormatter())
@@ -102,7 +126,25 @@ def get_trace_logger(trace_id: str):
     return logger
 
 def call_service(url: str, method: str, trace_id: str, json_data: dict = None, timeout: float = 5.0):
-    """Helper function to call microservices"""
+    """
+    Execute HTTP request to downstream microservice with error handling.
+    
+    Args:
+        url: Full URL of the service endpoint
+        method: HTTP method ('POST' or 'GET')
+        trace_id: Trace ID to propagate in request headers
+        json_data: Optional JSON payload for POST requests
+        timeout: Request timeout in seconds (default: 5.0)
+    
+    Returns:
+        dict: JSON response from the service
+    
+    Raises:
+        HTTPException: On timeout, HTTP errors, or service failures with appropriate status codes
+    
+    Note:
+        Automatically adds 'X-Trace-Id' header for distributed tracing
+    """
     headers = {"X-Trace-Id": trace_id}
     try:
         if method == "POST":

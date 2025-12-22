@@ -110,7 +110,32 @@ def get_trace_id(x_trace_id: Optional[str] = Header(None)) -> str:
 
 
 def assess_order_risk(symbol: str, quantity: int, price: float, pnl: float, order_type: OrderType, trace_id: str, order_id: str) -> Dict[str, Any]:
-    """Assess order-type specific risks"""
+    """
+    Evaluate order-type specific risk factors.
+    
+    Args:
+        symbol: Stock ticker symbol
+        quantity: Number of shares
+        price: Price per share
+        pnl: Estimated profit/loss
+        order_type: BUY or SELL
+        trace_id: Trace ID for logging
+        order_id: Order ID for logging
+    
+    Returns:
+        dict: Risk assessment with keys:
+            - 'risk_points': Total risk points for order-specific factors
+            - 'factors': Dictionary of individual risk factor scores
+    
+    Risk Factors:
+        BUY orders:
+            - Large position risk (>$100K): 15 points
+            - Expensive purchase (PnL < -$5000): 10 points
+        
+        SELL orders:
+            - Selling at loss (negative PnL): 15-20 points based on loss amount
+            - Large liquidation (>$50K): 10 points
+    """
     logger.info(f"[assess_order_risk] Assessing {order_type} order risks", 
                extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'assess_order_risk'})
     
@@ -155,7 +180,29 @@ def assess_order_risk(symbol: str, quantity: int, price: float, pnl: float, orde
 
 
 def check_portfolio_concentration(symbol: str, quantity: int, price: float, trace_id: str, order_id: str) -> tuple[float, Dict[str, Any]]:
-    """Check portfolio concentration risk"""
+    """
+    Analyze portfolio concentration risk for the position.
+    
+    Args:
+        symbol: Stock ticker symbol
+        quantity: Number of shares
+        price: Price per share
+        trace_id: Trace ID for logging
+        order_id: Order ID for logging
+    
+    Returns:
+        tuple: (concentration_risk_points, details_dict)
+            - concentration_risk_points: Risk score (0-20)
+            - details_dict: Contains 'concentration_pct' and 'position_value'
+    
+    Risk Thresholds:
+        - Concentration > 10% of portfolio: 20 risk points
+        - Concentration > 5% of portfolio: 10 risk points
+        - Concentration ≤ 5% of portfolio: 0 risk points
+    
+    Note:
+        Assumes a $1M portfolio value for simulation
+    """
     logger.info("[check_portfolio_concentration] Analyzing portfolio concentration", 
                extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'check_portfolio_concentration'})
     
@@ -182,7 +229,28 @@ def check_portfolio_concentration(symbol: str, quantity: int, price: float, trac
 
 
 def check_sector_limits(symbol: str, trace_id: str, order_id: str) -> tuple[bool, Optional[str]]:
-    """Check if sector exposure limits are exceeded"""
+    """
+    Validate sector exposure limits and trigger compliance checks if needed.
+    
+    Args:
+        symbol: Stock ticker symbol
+        trace_id: Trace ID for logging
+        order_id: Order ID for logging
+    
+    Returns:
+        tuple: (is_valid, error_message)
+            - is_valid: Always True (warnings only, no blocking)
+            - error_message: Always None
+    
+    Side Effects:
+        - For Technology sector positions when exposure > 40%:
+          Triggers 3-second deep compliance check (simulated database query)
+        - Logs warnings for high sector concentration
+    
+    Note:
+        BUG: Deep compliance check causes 3s delay for NVDA/AAPL/MSFT orders
+        when tech sector exposure is already high
+    """
     logger.info(f"[check_sector_limits] Checking sector limits for {symbol}", 
                extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'check_sector_limits'})
     
@@ -216,7 +284,29 @@ def check_sector_limits(symbol: str, trace_id: str, order_id: str) -> tuple[bool
 
 def validate_compliance_rules(symbol: str, quantity: int, price: float, order_type: OrderType, 
                              trace_id: str, order_id: str) -> tuple[bool, Optional[str]]:
-    """Validate against compliance and regulatory rules"""
+    """
+    Validate order against compliance and regulatory requirements.
+    
+    Args:
+        symbol: Stock ticker symbol
+        quantity: Number of shares
+        price: Price per share
+        order_type: BUY or SELL
+        trace_id: Trace ID for logging
+        order_id: Order ID for logging
+    
+    Returns:
+        tuple: (is_compliant, error_message)
+            - is_compliant: True if all checks pass, False otherwise
+            - error_message: None if compliant, error description if not
+    
+    Compliance Checks:
+        1. Single trade limit: Order value must not exceed $500,000
+        2. Restricted stocks: Symbol must not be on restricted list
+    
+    Note:
+        Failed compliance checks result in order rejection
+    """
     logger.info("[validate_compliance_rules] Running compliance checks", 
                extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'validate_compliance_rules'})
     
@@ -248,9 +338,37 @@ def calculate_risk_score(
     order_type: OrderType
 ) -> tuple[float, Dict[str, Any]]:
     """
-    Calculate risk score based on multiple factors
-    Returns: (risk_score, risk_factors)
-    Risk score ranges from 0-100, where higher is riskier
+    Calculate comprehensive risk score using multi-factor analysis.
+    
+    Args:
+        symbol: Stock ticker symbol
+        quantity: Number of shares
+        price: Price per share
+        pnl: Estimated profit/loss
+        order_type: BUY or SELL (currently unused in calculation)
+    
+    Returns:
+        tuple: (risk_score, risk_factors_dict)
+            - risk_score: Total risk score (0-100, higher = riskier)
+            - risk_factors_dict: Detailed breakdown of all risk components
+    
+    Risk Components (max 100 points):
+        1. Position Size Risk (0-30 points):
+           - > $100K: 30 pts | $50K-$100K: 20 pts | $10K-$50K: 10 pts | < $10K: 5 pts
+        
+        2. P&L Risk (0-30 points):
+           - < -$5000: 30 pts | -$5000 to -$1000: 20 pts | -$1000 to $0: 10 pts
+           - > $10,000 profit: 15 pts | else: 5 pts
+        
+        3. Quantity Risk (0-20 points):
+           - > 500 shares: 20 pts | 200-500: 15 pts | 100-200: 10 pts | < 100: 5 pts
+        
+        4. Volatility Risk (0-20 points):
+           - TSLA: 20 pts | NVDA: 15 pts | META: 10 pts | Others: 5 pts
+    
+    Note:
+        BUG: Quantity threshold at exactly 100 causes jump from 5 to 10 points
+        at quantity=101 (off-by-one error in boundary condition)
     """
     risk_score = 0
     risk_factors = {}
@@ -323,7 +441,24 @@ def calculate_risk_score(
 
 
 def determine_risk_level(risk_score: float) -> RiskLevel:
-    """Determine risk level based on score thresholds"""
+    """
+    Map numeric risk score to categorical risk level.
+    
+    Args:
+        risk_score: Numeric risk score (0-100)
+    
+    Returns:
+        RiskLevel: HIGH, MEDIUM, or LOW
+    
+    Thresholds:
+        - score ≥ 70: HIGH
+        - 40 ≤ score < 70: MEDIUM
+        - score < 40: LOW
+    
+    Note:
+        BUG: Boundary scores of exactly 40.0 or 70.0 may have
+        ambiguous handling due to floating-point comparison
+    """
     # Risk level thresholds: HIGH >= 70, MEDIUM >= 40, LOW < 40
     if risk_score >= 70:
         return RiskLevel.HIGH
@@ -334,7 +469,21 @@ def determine_risk_level(risk_score: float) -> RiskLevel:
 
 
 def get_recommendation(risk_level: RiskLevel, risk_score: float) -> str:
-    """Get recommendation based on risk level"""
+    """
+    Generate human-readable risk recommendation.
+    
+    Args:
+        risk_level: Categorical risk level (HIGH, MEDIUM, LOW)
+        risk_score: Numeric risk score for context
+    
+    Returns:
+        str: Recommendation message with score and suggested action
+    
+    Recommendations:
+        - HIGH: Advise reduction or rejection
+        - MEDIUM: Proceed with caution and close monitoring
+        - LOW: Approve with normal monitoring
+    """
     if risk_level == RiskLevel.HIGH:
         return f"HIGH RISK (score: {risk_score:.1f}) - Consider reducing position size or rejecting trade"
     elif risk_level == RiskLevel.MEDIUM:

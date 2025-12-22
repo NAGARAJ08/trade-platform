@@ -102,11 +102,22 @@ def get_trace_id(x_trace_id: Optional[str] = Header(None)) -> str:
 
 def get_market_price(symbol: str, scenario: Optional[str] = None) -> float:
     """
-    Get current market price for a symbol
-    Returns mock prices with realistic market variance to simulate real trading conditions.
+    Retrieve current market price for a trading symbol with simulated variance.
     
-    Note: Adds +/- 2% variance to simulate real-time market fluctuations.
-    This provides more realistic pricing for order execution.
+    Args:
+        symbol: Stock ticker symbol (e.g., 'AAPL', 'NVDA')
+        scenario: Optional scenario identifier (reserved for future use)
+    
+    Returns:
+        float: Current market price rounded to 2 decimal places
+    
+    Raises:
+        ValueError: If symbol is not found in supported symbols list
+    
+    Note:
+        - Applies ±2% random variance to base price for realistic market simulation
+        - Simulates real-time price fluctuations between service calls
+        - Used for both validation and execution pricing
     """
     base_prices = {
         "AAPL": 175.50,
@@ -134,8 +145,17 @@ def get_market_price(symbol: str, scenario: Optional[str] = None) -> float:
 
 def get_cost_basis(symbol: str) -> float:
     """
-    Get cost basis for PnL calculation
-    This represents the average purchase price
+    Retrieve average cost basis for profit/loss calculations.
+    
+    Args:
+        symbol: Stock ticker symbol
+    
+    Returns:
+        float: Average purchase price for the symbol, defaults to $50.00 if unknown
+    
+    Note:
+        Cost basis represents the average price paid per share and is used
+        to calculate estimated P&L on SELL orders or unrealized gains on BUY orders
     """
     cost_basis = {
         "AAPL": 165.00,
@@ -151,7 +171,31 @@ def get_cost_basis(symbol: str) -> float:
 
 
 def calculate_total_cost(quantity: int, price: float, symbol: str, order_type: OrderType, trace_id: str, order_id: str) -> Dict[str, float]:
-    """Calculate total cost/proceeds based on order type including all fees"""
+    """
+    Calculate comprehensive cost breakdown including all fees and commissions.
+    
+    Args:
+        quantity: Number of shares to trade
+        price: Price per share
+        symbol: Stock ticker symbol
+        order_type: BUY or SELL
+        trace_id: Trace ID for logging
+        order_id: Order ID for logging
+    
+    Returns:
+        dict: Cost breakdown with keys:
+            - 'base_amount': Base cost (BUY) or gross proceeds (SELL)
+            - 'commission': Trading commission
+            - 'fees': Exchange/regulatory fees
+            - 'total_cost': Final amount (including all fees)
+    
+    Note:
+        BUY orders: total_cost = base + commission + fees (amount to debit)
+        SELL orders: total_cost = base - commission - fees (net proceeds)
+        
+        BUG: Large SELL orders (>200 shares) of TSLA/NVDA incorrectly apply
+        2% extra fee instead of 0.2%
+    """
     logger.info(f"[calculate_total_cost] Calculating cost for {order_type} order", 
                extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'calculate_total_cost'})
     
@@ -189,7 +233,26 @@ def calculate_total_cost(quantity: int, price: float, symbol: str, order_type: O
 
 
 def calculate_estimated_pnl(symbol: str, quantity: int, price: float, order_type: OrderType, trace_id: str, order_id: str) -> float:
-    """Calculate estimated PnL based on order type"""
+    """
+    Calculate estimated profit/loss for the order.
+    
+    Args:
+        symbol: Stock ticker symbol
+        quantity: Number of shares
+        price: Current market price per share
+        order_type: BUY or SELL
+        trace_id: Trace ID for logging
+        order_id: Order ID for logging
+    
+    Returns:
+        float: Estimated P&L rounded to 2 decimal places
+            - Positive: Profit (selling above cost basis)
+            - Negative: Loss (buying above cost basis or selling below)
+    
+    Calculation:
+        BUY: PnL = -(price - cost_basis) * quantity (negative = paying premium)
+        SELL: PnL = (price - cost_basis) * quantity (positive = profit)
+    """
     logger.info(f"[calculate_estimated_pnl] Calculating PnL for {order_type} order", 
                extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'calculate_estimated_pnl'})
     
@@ -211,7 +274,27 @@ def calculate_estimated_pnl(symbol: str, quantity: int, price: float, order_type
 
 
 def calculate_commission(quantity: int, price: float, order_type: OrderType, trace_id: str, order_id: str) -> float:
-    """Calculate trading commission based on order size"""
+    """
+    Calculate trading commission with volume-based discount tiers.
+    
+    Args:
+        quantity: Number of shares
+        price: Price per share
+        order_type: BUY or SELL (currently unused)
+        trace_id: Trace ID for logging
+        order_id: Order ID for logging
+    
+    Returns:
+        float: Commission amount rounded to 2 decimal places
+    
+    Commission Tiers:
+        - Order value > $100,000: 0.2% commission
+        - Order value > $50,000: 0.3% commission
+        - Order value ≤ $50,000: 0.5% commission (base rate)
+    
+    Note:
+        Early rounding may cause precision loss on large orders
+    """
     logger.info("[calculate_commission] Calculating commission", 
                extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'calculate_commission'})
     
@@ -247,7 +330,28 @@ def calculate_commission(quantity: int, price: float, order_type: OrderType, tra
 
 
 def estimate_slippage(quantity: int, symbol: str, order_type: OrderType, trace_id: str, order_id: str) -> float:
-    """Estimate price slippage for large orders"""
+    """
+    Estimate price slippage based on order size and symbol volatility.
+    
+    Args:
+        quantity: Number of shares
+        symbol: Stock ticker symbol
+        order_type: BUY or SELL (currently unused)
+        trace_id: Trace ID for logging
+        order_id: Order ID for logging
+    
+    Returns:
+        float: Estimated slippage as a decimal percentage (e.g., 0.015 = 1.5%)
+    
+    Slippage Factors:
+        - Volatile symbols (TSLA, NVDA, META) have higher base slippage
+        - Quantity > 1000: 2x base slippage
+        - Quantity > 500: 1.5x base slippage
+        - Quantity ≤ 500: 1x base slippage
+    
+    Note:
+        Slippage represents expected price movement during order execution
+    """
     logger.info(f"[estimate_slippage] Estimating slippage for {quantity} shares of {symbol}", 
                extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'estimate_slippage'})
     
@@ -273,7 +377,24 @@ def estimate_slippage(quantity: int, symbol: str, order_type: OrderType, trace_i
 
 
 def adjust_price_for_slippage(price: float, slippage: float, order_type: OrderType) -> float:
-    """Adjust price based on estimated slippage"""
+    """
+    Apply slippage adjustment to execution price.
+    
+    Args:
+        price: Original market price
+        slippage: Slippage percentage as decimal (e.g., 0.015 for 1.5%)
+        order_type: BUY or SELL
+    
+    Returns:
+        float: Adjusted price rounded to 2 decimal places
+    
+    Price Adjustment:
+        - BUY: price increases (unfavorable for buyer)
+        - SELL: price decreases (unfavorable for seller)
+    
+    Note:
+        Slippage always works against the trader to simulate real market conditions
+    """
     if order_type == OrderType.BUY:
         # Buying: price goes up (unfavorable)
         adjusted_price = price * (1 + slippage)
