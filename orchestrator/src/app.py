@@ -470,31 +470,16 @@ def place_order(order: OrderRequest, request: Request):
             trace_id=trace_id,
             latency_ms=overall_duration_ms,
             details={
-                "price_variance": {
-                    "validation_price": validation_price,
-                    "execution_price": execution_price,
-                    "variance": round(price_variance, 2),
-                    "variance_pct": round(price_variance_pct, 2)
-                },
-                "performance": {
-                    "total_duration_ms": overall_duration_ms,
-                    "breakdown": {
-                        "validation_ms": validation_duration_ms,
-                        "validation_pricing_ms": validation_pricing_duration_ms,
-                        "pricing_ms": pricing_duration_ms,
-                        "risk_assessment_ms": risk_duration_ms,
-                        "execution_ms": execution_duration_ms
-                    }
-                },
                 "execution_flow": {
                     "validation": {
                         "status": "passed",
                         "normalized_quantity": actual_quantity,
+                        "validation_price": validation_price,
                         "duration_ms": validation_duration_ms,
                         "timestamp": trade_result.get('timestamp')
                     },
                     "pricing_calculation": {
-                        "price_per_share": pricing_result.get('price'),
+                        "execution_price": pricing_result.get('price'),
                         "total_cost": pricing_result.get('total_cost'),
                         "estimated_pnl": pricing_result.get('estimated_pnl'),
                         "commission": pricing_result.get('commission'),
@@ -527,14 +512,7 @@ def place_order(order: OrderRequest, request: Request):
                     "commission": pricing_result.get('commission'),
                     "fees": pricing_result.get('fees'),
                     "base_amount": pricing_result.get('base_amount'),
-                    "risk_level": risk_result.get('risk_level'),
-                    "performance": {
-                        "overall_duration_ms": overall_duration_ms,
-                        "validation_ms": validation_duration_ms,
-                        "pricing_ms": pricing_duration_ms,
-                        "risk_assessment_ms": risk_duration_ms,
-                        "execution_ms": execution_duration_ms
-                    }
+                    "risk_level": risk_result.get('risk_level')
                 }
             }
         )
@@ -601,10 +579,6 @@ def place_order(order: OrderRequest, request: Request):
             trace_id=trace_id,
             latency_ms=overall_duration_ms,
             details={
-                "performance": {
-                    "total_duration_ms": overall_duration_ms,
-                    "failure_at_stage": failure_stage
-                },
                 "execution_flow": execution_flow
             }
         )
