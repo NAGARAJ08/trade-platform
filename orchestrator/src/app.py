@@ -249,7 +249,16 @@ def place_order(order: OrderRequest, request: Request):
                 status="REJECTED",
                 message=trade_result.get("reason", "Trade validation failed"),
                 trace_id=trace_id,
-                details=trade_result
+                details={
+                    "execution_flow": {
+                        "validation": {
+                            "status": "failed",
+                            "reason": trade_result.get('reason'),
+                            "duration_ms": validation_duration_ms,
+                            "timestamp": trade_result.get('timestamp')
+                        }
+                    }
+                }
             )
         
         # Use normalized quantity from validation
@@ -347,12 +356,30 @@ def place_order(order: OrderRequest, request: Request):
                     message="Risk assessment service timeout",
                     trace_id=trace_id,
                     details={
-                        "validation": trade_result,
-                        "pricing": pricing_result,
-                        "risk": {
-                            "error": "timeout",
-                            "message": "Risk service did not respond within timeout period (5 seconds)",
-                            "attempted_at": datetime.now().isoformat()
+                        "execution_flow": {
+                            "validation": {
+                                "status": "passed",
+                                "normalized_quantity": actual_quantity,
+                                "validation_price": validation_price,
+                                "duration_ms": validation_duration_ms,
+                                "timestamp": trade_result.get('timestamp')
+                            },
+                            "pricing_calculation": {
+                                "execution_price": pricing_result.get('price'),
+                                "total_cost": pricing_result.get('total_cost'),
+                                "estimated_pnl": pricing_result.get('estimated_pnl'),
+                                "commission": pricing_result.get('commission'),
+                                "fees": pricing_result.get('fees'),
+                                "base_amount": pricing_result.get('base_amount'),
+                                "duration_ms": pricing_duration_ms,
+                                "timestamp": pricing_result.get('timestamp')
+                            },
+                            "risk_assessment": {
+                                "error": "timeout",
+                                "message": "Risk service did not respond within timeout period (15 seconds)",
+                                "attempted_at": datetime.now().isoformat(),
+                                "duration_ms": risk_duration_ms
+                            }
                         }
                     }
                 )
@@ -373,9 +400,33 @@ def place_order(order: OrderRequest, request: Request):
                 message="Order rejected due to high risk",
                 trace_id=trace_id,
                 details={
-                    "trade": trade_result,
-                    "pricing": pricing_result,
-                    "risk": risk_result
+                    "execution_flow": {
+                        "validation": {
+                            "status": "passed",
+                            "normalized_quantity": actual_quantity,
+                            "validation_price": validation_price,
+                            "duration_ms": validation_duration_ms,
+                            "timestamp": trade_result.get('timestamp')
+                        },
+                        "pricing_calculation": {
+                            "execution_price": pricing_result.get('price'),
+                            "total_cost": pricing_result.get('total_cost'),
+                            "estimated_pnl": pricing_result.get('estimated_pnl'),
+                            "commission": pricing_result.get('commission'),
+                            "fees": pricing_result.get('fees'),
+                            "base_amount": pricing_result.get('base_amount'),
+                            "duration_ms": pricing_duration_ms,
+                            "timestamp": pricing_result.get('timestamp')
+                        },
+                        "risk_assessment": {
+                            "risk_level": risk_result.get('risk_level'),
+                            "risk_score": risk_result.get('risk_score'),
+                            "approved": risk_result.get('approved'),
+                            "risk_factors": risk_result.get('risk_factors'),
+                            "duration_ms": risk_duration_ms,
+                            "timestamp": risk_result.get('timestamp')
+                        }
+                    }
                 }
             )
         
@@ -419,43 +470,7 @@ def place_order(order: OrderRequest, request: Request):
                 'risk_score': risk_result.get('risk_score')
             }
         })
-        
-        # return OrderResponse(
-        #     order_id=order_id,
-        #     status="EXECUTED",
-        #     message=f"Order executed successfully: {order.order_type} {actual_quantity} {order.symbol} @ ${pricing_result.get('price')}",
-        #     trace_id=trace_id,
-        #     details={
-        #         "execution_flow": {
-        #             "validation": {
-        #                 "status": "passed",
-        #                 "normalized_quantity": actual_quantity,
-        #                 "duration_ms": validation_duration_ms,
-        #                 "timestamp": trade_result.get('timestamp')
-        #             },
-        #             "pricing_calculation": {
-        #                 "price_per_share": pricing_result.get('price'),
-        #                 "total_cost": pricing_result.get('total_cost'),
-        #                 "estimated_pnl": pricing_result.get('estimated_pnl'),
-        #                 "duration_ms": pricing_duration_ms,
-        #                 "timestamp": pricing_result.get('timestamp')
-        #             },
-        #             "risk_assessment": {
-        #                 "risk_level": risk_result.get('risk_level'),
-        #                 "risk_score": risk_result.get('risk_score'),
-        #                 "approved": risk_result.get('approved'),
-        #                 "risk_factors": risk_result.get('risk_factors'),
-        #                 "duration_ms": risk_duration_ms,
-        #                 "timestamp": risk_result.get('timestamp')
-        #             },
-        #             "execution": {
-        #                 "status": execution_result.get('status'),
-        #                 "duration_ms": execution_duration_ms,
-        #                 "execution_time": execution_result.get('execution_time')
-        #             }
-        #         },
-        # })
-        
+                
         # Calculate overall end-to-end latency
         overall_duration_ms = int((time_module.time() - overall_start) * 1000)
         
@@ -537,15 +552,19 @@ def place_order(order: OrderRequest, request: Request):
             execution_flow["validation"] = {
                 "status": "passed",
                 "normalized_quantity": trade_result.get('normalized_quantity'),
+                "validation_price": validation_price if 'validation_price' in locals() else None,
                 "duration_ms": validation_duration_ms if 'validation_duration_ms' in locals() else None,
                 "timestamp": trade_result.get('timestamp')
             }
         
         if pricing_result:
             execution_flow["pricing_calculation"] = {
-                "price_per_share": pricing_result.get('price'),
+                "execution_price": pricing_result.get('price'),
                 "total_cost": pricing_result.get('total_cost'),
                 "estimated_pnl": pricing_result.get('estimated_pnl'),
+                "commission": pricing_result.get('commission'),
+                "fees": pricing_result.get('fees'),
+                "base_amount": pricing_result.get('base_amount'),
                 "duration_ms": pricing_duration_ms if 'pricing_duration_ms' in locals() else None,
                 "timestamp": pricing_result.get('timestamp')
             }
