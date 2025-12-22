@@ -162,7 +162,7 @@ def assess_order_risk(symbol: str, quantity: int, price: float, pnl: float, orde
         if pnl < 0:
             risk_points += 20
             factors['loss_realization_risk'] = 20
-            logger.error(f"[assess_order_risk] SELLING AT LOSS detected: ${pnl:.2f}", 
+            logger.exception(f"[assess_order_risk] SELLING AT LOSS detected: ${pnl:.2f}", 
                         extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'assess_order_risk'})
         
         # Check large position liquidation
@@ -310,14 +310,14 @@ def validate_compliance_rules(symbol: str, quantity: int, price: float, order_ty
     
     # Check single order size limit ($500K)
     if position_value > 500000:
-        logger.error(f"[validate_compliance_rules] Order exceeds single trade limit: ${position_value:.2f} > $500,000", 
+        logger.exception(f"[validate_compliance_rules] Order exceeds single trade limit: ${position_value:.2f} > $500,000", 
                     extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'validate_compliance_rules'})
         return False, f"Order value ${position_value:.2f} exceeds single trade limit of $500,000"
     
     # Check restricted stocks (simulated)
     restricted_stocks = []  # Would come from compliance database
     if symbol in restricted_stocks:
-        logger.error(f"[validate_compliance_rules] Symbol {symbol} is currently restricted", 
+        logger.exception(f"[validate_compliance_rules] Symbol {symbol} is currently restricted", 
                     extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'validate_compliance_rules'})
         return False, f"Symbol {symbol} is currently restricted for trading"
     
@@ -326,7 +326,233 @@ def validate_compliance_rules(symbol: str, quantity: int, price: float, order_ty
     return True, None
 
 
+def calculate_volatility_multiplier(symbol: str) -> tuple[float, str]:
+    """
+    Calculate volatility multiplier based on symbol's historical volatility.
+    
+    Args:
+        symbol: Stock ticker symbol
+    
+    Returns:
+        tuple: (multiplier, explanation)
+            - multiplier: Risk multiplier (1.0-2.5)
+            - explanation: Reasoning for the multiplier
+    """
+    volatility_map = {
+        "TSLA": (2.5, "Highly volatile - frequent 5%+ daily moves"),
+        "NVDA": (2.0, "High volatility - tech sector leader with large swings"),
+        "META": (1.8, "Moderate-high volatility - social media sector"),
+        "AMZN": (1.5, "Moderate volatility - large cap tech"),
+        "GOOGL": (1.3, "Low-moderate volatility - stable tech giant"),
+        "AAPL": (1.2, "Low volatility - blue chip stock"),
+        "MSFT": (1.2, "Low volatility - stable enterprise focus")
+    }
+    
+    return volatility_map.get(symbol, (1.0, "Standard volatility - unknown pattern"))
+
+
+def calculate_position_size_impact(position_value: float) -> tuple[int, str]:
+    """
+    Calculate risk points based on position size.
+    
+    Args:
+        position_value: Total value of position
+    
+    Returns:
+        tuple: (risk_points, explanation)
+            - risk_points: Risk score (5-30)
+            - explanation: Detailed reasoning
+    """
+    if position_value > 100000:
+        return (30, f"Critical size: ${position_value:,.2f} > $100K - maximum position risk")
+    elif position_value > 50000:
+        return (20, f"Large position: ${position_value:,.2f} in $50K-$100K range")
+    elif position_value > 10000:
+        return (10, f"Medium position: ${position_value:,.2f} in $10K-$50K range")
+    else:
+        return (5, f"Small position: ${position_value:,.2f} < $10K - minimal risk")
+
+
+def calculate_pnl_risk_factor(pnl: float, order_type: str) -> tuple[int, str]:
+    """
+    Calculate risk based on P&L characteristics.
+    
+    Args:
+        pnl: Estimated profit/loss
+        order_type: BUY or SELL
+    
+    Returns:
+        tuple: (risk_points, explanation)
+            - risk_points: Risk score (5-30)
+            - explanation: Detailed reasoning
+    """
+    if pnl < -5000:
+        return (30, f"Severe loss: ${pnl:,.2f} - exceeds -$5K threshold")
+    elif pnl < -1000:
+        return (20, f"Significant loss: ${pnl:,.2f} in -$5K to -$1K range")
+    elif pnl < 0:
+        return (10, f"Minor loss: ${pnl:,.2f} - negative but manageable")
+    elif pnl > 10000:
+        return (15, f"Excessive gain: ${pnl:,.2f} > $10K - profit-taking risk")
+    else:
+        return (5, f"Normal PnL: ${pnl:,.2f} - within expected range")
+
+
+def assess_quantity_risk(quantity: int) -> tuple[int, str]:
+    """
+    Assess execution risk based on order quantity.
+    
+    Args:
+        quantity: Number of shares
+    
+    Returns:
+        tuple: (risk_points, explanation)
+            - risk_points: Risk score (5-20)
+            - explanation: Detailed reasoning
+    """
+    if quantity > 500:
+        return (20, f"Very large order: {quantity} shares - high execution/slippage risk")
+    elif quantity > 200:
+        return (15, f"Large order: {quantity} shares - moderate execution risk")
+    elif quantity > 100:
+        return (10, f"Medium order: {quantity} shares - standard execution risk")
+    else:
+        return (5, f"Small order: {quantity} shares - minimal execution risk")
+
+
+def calculate_sector_risk_adjustment(symbol: str, base_score: float) -> tuple[float, str]:
+    """
+    Apply sector-based risk adjustments to base score.
+    
+    Args:
+        symbol: Stock ticker symbol
+        base_score: Initial risk score before sector adjustment
+    
+    Returns:
+        tuple: (adjusted_score, explanation)
+            - adjusted_score: Risk score after sector multiplier
+            - explanation: Reasoning for adjustment
+    """
+    sector_map = {
+        "TSLA": ("Technology/Auto", 1.3),
+        "NVDA": ("Technology/Semiconductors", 1.25),
+        "META": ("Technology/Social Media", 1.2),
+        "AAPL": ("Technology/Consumer Electronics", 1.1),
+        "GOOGL": ("Technology/Internet", 1.1),
+        "MSFT": ("Technology/Software", 1.05),
+        "AMZN": ("Technology/E-commerce", 1.15)
+    }
+    
+    sector_info, multiplier = sector_map.get(symbol, ("Unknown", 1.0))
+    adjusted = base_score * multiplier
+    
+    explanation = f"Sector: {sector_info}, Multiplier: {multiplier}x, Adjusted: {base_score:.2f} → {adjusted:.2f}"
+    return (adjusted, explanation)
+
+
+def normalize_risk_score(raw_score: float) -> float:
+    """
+    Normalize risk score to 0-100 range and apply final adjustments.
+    
+    Args:
+        raw_score: Unnormalized risk score
+    
+    Returns:
+        float: Normalized score (0-100) rounded to 3 decimals
+    """
+    # Cap at 100
+    normalized = min(raw_score, 100.0)
+    
+    # Floor at 0
+    normalized = max(normalized, 0.0)
+    
+    return round(normalized, 3)
+
+
 def calculate_risk_score(
+    symbol: str,
+    quantity: int,
+    price: float,
+    pnl: float,
+    order_type: OrderType
+) -> tuple[float, Dict[str, Any]]:
+    """
+    Calculate comprehensive risk score using multi-factor analysis with complex calculations.
+    
+    Args:
+        symbol: Stock ticker symbol
+        quantity: Number of shares
+        price: Price per share
+        pnl: Estimated profit/loss
+        order_type: BUY or SELL
+    
+    Returns:
+        tuple: (risk_score, risk_factors_dict)
+            - risk_score: Total risk score (0-100, higher = riskier)
+            - risk_factors_dict: Detailed breakdown of all risk components
+    
+    Complex Calculation Flow:
+        1. Calculate base risk factors (position size, PnL, quantity)
+        2. Apply volatility multiplier based on symbol
+        3. Apply sector risk adjustment
+        4. Normalize final score to 0-100 range
+    
+    This creates a multi-step calculation chain with intermediate validations.
+    """
+    risk_factors = {}
+    
+    # Step 1: Calculate position value
+    position_value = quantity * price
+    risk_factors["position_value"] = round(position_value, 3)
+    
+    # Step 2: Calculate base risk factors using helper functions
+    position_risk, position_explanation = calculate_position_size_impact(position_value)
+    pnl_risk, pnl_explanation = calculate_pnl_risk_factor(pnl, order_type.value)
+    quantity_risk, quantity_explanation = assess_quantity_risk(quantity)
+    
+    # Aggregate base risk score
+    base_risk_score = position_risk + pnl_risk + quantity_risk
+    
+    risk_factors["position_size_risk"] = position_risk
+    risk_factors["position_risk_logic"] = position_explanation
+    risk_factors["pnl_risk"] = pnl_risk
+    risk_factors["estimated_pnl"] = round(pnl, 3)
+    risk_factors["pnl_risk_logic"] = pnl_explanation
+    risk_factors["quantity_risk"] = quantity_risk
+    risk_factors["quantity"] = quantity
+    risk_factors["quantity_risk_logic"] = quantity_explanation
+    risk_factors["base_risk_score"] = round(base_risk_score, 3)
+    
+    # Step 3: Apply volatility multiplier
+    volatility_multiplier, volatility_explanation = calculate_volatility_multiplier(symbol)
+    risk_after_volatility = base_risk_score * volatility_multiplier
+    
+    risk_factors["volatility_multiplier"] = volatility_multiplier
+    risk_factors["volatility_explanation"] = volatility_explanation
+    risk_factors["risk_after_volatility"] = round(risk_after_volatility, 3)
+    
+    # Step 4: Apply sector risk adjustment
+    risk_after_sector, sector_explanation = calculate_sector_risk_adjustment(symbol, risk_after_volatility)
+    
+    risk_factors["sector_risk_adjustment"] = sector_explanation
+    risk_factors["risk_after_sector"] = round(risk_after_sector, 3)
+    
+    # Step 5: Normalize to 0-100 range
+    final_risk_score = normalize_risk_score(risk_after_sector)
+    risk_factors["total_risk_score"] = final_risk_score
+    
+    risk_factors["calculation_summary"] = (
+        f"Base: {base_risk_score:.2f} → "
+        f"×{volatility_multiplier} (volatility) = {risk_after_volatility:.2f} → "
+        f"Sector adjusted = {risk_after_sector:.2f} → "
+        f"Normalized = {final_risk_score:.3f}"
+    )
+    
+    return final_risk_score, risk_factors
+
+
+# OLD SIMPLE VERSION - REPLACED WITH COMPLEX MULTI-STEP CALCULATION ABOVE
+def calculate_risk_score_OLD(
     symbol: str,
     quantity: int,
     price: float,
@@ -524,7 +750,7 @@ def assess_risk(request_data: RiskAssessmentRequest, request: Request):
         )
         
         if not compliance_ok:
-            logger.error(f"[assess_risk] Compliance check failed: {compliance_reason}", 
+            logger.exception(f"[assess_risk] Compliance check failed: {compliance_reason}", 
                         extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'function': 'assess_risk'})
             raise HTTPException(status_code=403, detail=f"Compliance validation failed: {compliance_reason}")
         
@@ -556,11 +782,76 @@ def assess_risk(request_data: RiskAssessmentRequest, request: Request):
         # PnL integrity check - detect if PnL calculation seems wrong
         pnl_ratio = abs(request_data.pnl) / position_value if position_value > 0 else 0
         
+        # EXPECTED VS ACTUAL VALIDATION: Verify PnL calculation matches expected formula
+        # This catches discrepancies in upstream pricing service calculations
+        logger.info(f"[assess_risk] Validating PnL calculation accuracy for {request_data.symbol}",
+                   extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'function': 'assess_risk'})
+        
+        # Get expected cost basis for validation
+        expected_cost_basis_map = {
+            "AAPL": 165.00,
+            "GOOGL": 135.00,
+            "MSFT": 360.00,  # Expected value - but pricing service uses 350.00!
+            "AMZN": 145.00,
+            "TSLA": 230.00,
+            "META": 340.00,
+            "NVDA": 475.00
+        }
+        
+        expected_cost_basis = expected_cost_basis_map.get(request_data.symbol, 50.0)
+        
+        # Calculate what PnL SHOULD be based on correct formula
+        if request_data.order_type.value == "BUY":
+            expected_pnl = -((request_data.price - expected_cost_basis) * request_data.quantity)
+        else:  # SELL
+            expected_pnl = (request_data.price - expected_cost_basis) * request_data.quantity
+        
+        expected_pnl = round(expected_pnl, 2)
+        actual_pnl = request_data.pnl
+        pnl_difference = abs(expected_pnl - actual_pnl)
+        
+        # Allow small tolerance for rounding (0.10)
+        if pnl_difference > 0.10:
+            logger.exception(f"[assess_risk] PnL CALCULATION MISMATCH DETECTED - Expected ${expected_pnl:.2f} but got ${actual_pnl:.2f} (difference: ${pnl_difference:.2f})", 
+                           extra={
+                               'trace_id': trace_id,
+                               'order_id': request_data.order_id,
+                               'function': 'assess_risk',
+                               'extra_data': {
+                                   'validation_type': 'expected_vs_actual',
+                                   'symbol': request_data.symbol,
+                                   'order_type': request_data.order_type.value,
+                                   'quantity': request_data.quantity,
+                                   'price': request_data.price,
+                                   'expected_cost_basis': expected_cost_basis,
+                                   'expected_pnl': expected_pnl,
+                                   'actual_pnl': actual_pnl,
+                                   'difference': pnl_difference,
+                                   'tolerance': 0.10,
+                                   'issue': 'PnL calculation does not match expected formula',
+                                   'suspected_cause': 'Pricing service may be using incorrect cost basis',
+                                   'impact': f'Orders for {request_data.symbol} showing {pnl_difference:.2f} discrepancy',
+                                   'recommendation': 'Verify pricing service cost basis data and calculation logic'
+                               }
+                           })
+            raise HTTPException(
+                status_code=422,
+                detail=f"Risk validation failed: PnL calculation mismatch for {request_data.symbol}. "
+                       f"Expected PnL: ${expected_pnl:.2f} (using cost basis ${expected_cost_basis}), "
+                       f"but received ${actual_pnl:.2f} from pricing service (difference: ${pnl_difference:.2f}). "
+                       f"This suggests pricing service may be using incorrect cost basis for calculations. "
+                       f"Order blocked pending investigation."
+            )
+        else:
+            logger.info(f"[assess_risk] PnL validation passed - Expected ${expected_pnl:.2f}, Got ${actual_pnl:.2f} (diff: ${pnl_difference:.2f})",
+                       extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'function': 'assess_risk',
+                              'extra_data': {'pnl_validation': 'passed', 'difference': pnl_difference}})
+        
         # Additional check: For SELL orders, verify PnL makes sense
         if request_data.order_type == "SELL" and request_data.pnl < 0:
             loss_percentage = abs(request_data.pnl) / position_value * 100
             if loss_percentage > 15:
-                logger.error(f"[assess_risk] Detected upstream calculation error - SELL order showing {loss_percentage:.1f}% loss", extra={
+                logger.exception(f"[assess_risk] Detected upstream calculation error - SELL order showing {loss_percentage:.1f}% loss", extra={
                     'trace_id': trace_id,
                     'order_id': request_data.order_id,
                     'function': 'assess_risk',
@@ -583,7 +874,7 @@ def assess_risk(request_data: RiskAssessmentRequest, request: Request):
                 )
         
         if pnl_ratio > 0.15:  # PnL shouldn't exceed 15% of position value in normal cases
-            logger.error(f"[assess_risk] PnL integrity check failed - PnL (${request_data.pnl}) is {pnl_ratio*100:.1f}% of position value (${position_value})", extra={
+            logger.exception(f"[assess_risk] PnL integrity check failed - PnL (${request_data.pnl}) is {pnl_ratio*100:.1f}% of position value (${position_value})", extra={
                 'trace_id': trace_id,
                 'order_id': request_data.order_id,
                 'function': 'assess_risk',

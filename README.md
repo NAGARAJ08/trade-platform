@@ -41,11 +41,31 @@ uvicorn risk_service.src.app:app --host 0.0.0.0 --port 8003
        │           └── check_order_limits()
        │               └── get_symbol_metadata()
        │
-       ├── STEP 2: Pricing & PnL Calculation
+       ├── STEP 1.5: Validation Price Snapshot (NEW)
        │   └── POST /pricing/calculate (pricing_pnl_service.py)
        │       └── calculate_pricing()
        │           ├── get_market_price()
+       │           │   └── validate_price_components()
+       │           │       └── check_price_range_validity() (Level 2)
+       │           │           └── verify_market_conditions() (Level 3)
        │           ├── calculate_total_cost()
+       │           │   └── validate_cost_breakdown() 
+       │           │       ├── verify_fee_calculations() (Level 2)
+       │           │       └── audit_commission_rate() (Level 3)
+       │           └── calculate_estimated_pnl()
+       │               └── get_cost_basis()
+       │
+       ├── STEP 2: Execution Pricing & PnL Calculation
+       │   └── POST /pricing/calculate (pricing_pnl_service.py)
+       │       └── calculate_pricing()
+       │           ├── get_market_price() 
+       │           │   └── validate_price_components() 
+       │           │       └── check_price_range_validity() (Level 2)
+       │           │           └── verify_market_conditions() (Level 3)
+       │           ├── calculate_total_cost()
+       │           │   └── validate_cost_breakdown() 
+       │           │       ├── verify_fee_calculations() (Level 2)
+       │           │       └── audit_commission_rate() (Level 3)
        │           └── calculate_estimated_pnl()
        │               └── get_cost_basis()
        │
@@ -53,9 +73,16 @@ uvicorn risk_service.src.app:app --host 0.0.0.0 --port 8003
        │   └── POST /risk/assess (risk_service.py)
        │       └── assess_risk()
        │           ├── validate_compliance_rules()
-       │           ├── check_sector_limits()
+       │           ├── check_sector_limits() 
        │           ├── assess_order_risk()
+       │           ├── [INLINE: Expected vs Actual PnL Check + Loss % Validation]
        │           ├── calculate_risk_score()
+       │           │   ├── calculate_position_size_impact()
+       │           │   ├── calculate_pnl_risk_factor()
+       │           │   ├── assess_quantity_risk()
+       │           │   ├── calculate_volatility_multiplier()
+       │           │   ├── calculate_sector_risk_adjustment()
+       │           │   └── normalize_risk_score()
        │           ├── determine_risk_level()
        │           └── get_recommendation()
        │
@@ -233,9 +260,106 @@ Each function in the order flow performs a key business logic step:
 }
 ```
 - **Expected Output:** Both orders fail with 503 error "Market data feed unavailable"
-- **Key Function:** `validate_market_data_feed()` in pricing_pnl_service (COMMON to both BUY and SELL)
+- **Key Function:** `get_market_price()` in pricing_pnl_service (COMMON to both BUY and SELL)
 - **RCA Goal:** Identify that both workflows fail at the same shared component
-- **Trace Pattern:** Both traces show error in `validate_market_data_feed` with `error_type: market_data_unavailable`
+- **Trace Pattern:** Both traces show error in `get_market_price` with `error_type: market_data_unavailable`
 
 ---
 
+### 11. Full Exception Stack Traces - Why does my large order fail with complete traceback?
+- **Input:**
+```json
+{
+  "symbol": "AAPL",
+  "quantity": 5000,
+  "order_type": "BUY"
+}
+```
+
+- **Expected Behavior:**
+  - Order requires $875,000 but account has only $500,000
+  - Validation fails with insufficient balance error
+  - **logger.exception()** captures COMPLETE Python stack trace
+
+---
+
+### 12. Deep Call Stack Validation - How do I trace nested function calls?
+- **Input:**
+```json
+{
+  "symbol": "AAPL",
+  "quantity": 100,
+  "order_type": "BUY"
+}
+```
+
+- **Expected Behavior:**
+  - Order succeeds, showing 3-level deep validation chains
+  - Price validation: `validate_price_components` → `check_price_range_validity` → `verify_market_conditions`
+  - Cost validation: `validate_cost_breakdown` → `verify_fee_calculations` → `audit_commission_rate`
+---
+
+### 13. Complex Multi-Step Risk Calculation - Why is my NVDA order scored as HIGH risk?
+- **Input:**
+```json
+{
+  "symbol": "NVDA",
+  "quantity": 200,
+  "order_type": "BUY"
+}
+```
+
+- **Expected Behavior:**
+  - Order triggers complex 5-step risk calculation
+  - Base score: Position (20) + PnL (20) + Quantity (10) = 50
+  - Volatility multiplier: 2.0x (NVDA high volatility) = 100
+  - Sector adjustment: 1.25x (Technology/Semiconductors) = 125
+  - Normalized to max 100
+  - Final score: 100.0 = HIGH RISK
+
+---
+
+### 14. Expected vs Actual Validation - Why does MSFT show PnL mismatch?
+- **Input:**
+```json
+{
+  "symbol": "MSFT",
+  "quantity": 100,
+  "order_type": "SELL"
+}
+```
+
+- **Expected Behavior:**
+  - Current price: ~$378.90
+  - Expected cost basis: $360.00
+  - Expected PnL: (378.90 - 360.00) × 100 = $1,890.00
+  - **BUG**: Pricing service uses $350.00 cost basis
+  - Actual PnL calculated: (378.90 - 350.00) × 100 = $2,890.00
+  - **Discrepancy detected: $1,000.00 difference!**
+  - Risk service validates and REJECTS order
+---
+
+### 15. Common Function Error Analysis - Why do both BUY and SELL fail for GME?
+- **Inputs:**
+```json
+// Test 1: BUY order
+{
+  "symbol": "GME",
+  "quantity": 100,
+  "order_type": "BUY"
+}
+
+// Test 2: SELL order
+{
+  "symbol": "GME",
+  "quantity": 50,
+  "order_type": "SELL"
+}
+```
+
+- **Expected Behavior:**
+  - **BOTH** orders fail at pricing stage
+  - **SAME** error: "Market data feed unavailable"
+  - **SAME** function: `get_market_price()`
+  - **SAME** status code: 503
+  - Proves common function affects both workflows

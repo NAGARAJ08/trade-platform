@@ -173,7 +173,7 @@ def validate_account_balance(quantity: int, price: float, symbol: str, order_typ
                           'extra_data': {'required': required_amount, 'available': account_balance}})
         
         if required_amount > account_balance:
-            logger.error(f"[validate_account_balance] Insufficient buying power: need ${required_amount:.2f}, have ${account_balance:.2f}", 
+            logger.exception(f"[validate_account_balance] Insufficient buying power: need ${required_amount:.2f}, have ${account_balance:.2f}", 
                         extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'validate_account_balance'})
             return False, f"Insufficient buying power: ${required_amount:.2f} required, ${account_balance:.2f} available"
     else:
@@ -186,7 +186,7 @@ def validate_account_balance(quantity: int, price: float, symbol: str, order_typ
                           'extra_data': {'symbol': symbol, 'holdings': current_holdings, 'sell_quantity': quantity}})
         
         if current_holdings < quantity:
-            logger.error(f"[validate_account_balance] Insufficient shares: have {current_holdings}, trying to sell {quantity}", 
+            logger.exception(f"[validate_account_balance] Insufficient shares: have {current_holdings}, trying to sell {quantity}", 
                         extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'validate_account_balance'})
             return False, f"Insufficient shares: have {current_holdings} shares, cannot sell {quantity}"
     
@@ -251,7 +251,7 @@ def get_symbol_metadata(symbol: str) -> Optional[Dict[str, Any]]:
     symbol_registry = {
         "AAPL": {"exchange": "NASDAQ", "sector": "Technology", "lot_size": 100, "max_order": 10000},
         "GOOGL": {"exchange": "NASDAQ", "sector": "Technology", "lot_size": 25, "max_order": 5000},
-        "MSFT": {"exchange": "NASDAQ", "sector": "Technology", "lot_size": 125, "max_order": 10000},
+        "MSFT": {"exchange": "NASDAQ", "sector": "Technology", "lot_size": 1, "max_order": 10000},
         "AMZN": {"exchange": "NASDAQ", "sector": "Consumer", "lot_size": 10, "max_order": 5000},
         "TSLA": {"exchange": "NASDAQ", "sector": "Automotive", "lot_size": 10, "max_order": 3000},
         "META": {"exchange": "NASDAQ", "sector": "Technology", "lot_size": 15, "max_order": 5000},
@@ -286,7 +286,7 @@ def check_symbol_tradeable(symbol: str, trace_id: str, order_id: str) -> tuple[b
     
     metadata = get_symbol_metadata(symbol)
     if not metadata:
-        logger.error(f"[check_symbol_tradeable] Symbol {symbol} not found in registry", 
+        logger.exception(f"[check_symbol_tradeable] Symbol {symbol} not found in registry", 
                     extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'check_symbol_tradeable'})
         return False, f"Symbol '{symbol}' is not supported for trading"
     
@@ -376,7 +376,7 @@ def check_order_limits(quantity: int, symbol: str, trace_id: str, order_id: str)
     
     # Global limit check
     if quantity > 10000:
-        logger.error(f"[check_order_limits] Order quantity {quantity} exceeds global maximum 10000", 
+        logger.exception(f"[check_order_limits] Order quantity {quantity} exceeds global maximum 10000", 
                     extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'check_order_limits'})
         return False, f"Order quantity {quantity} exceeds global maximum limit of 10000"
     
