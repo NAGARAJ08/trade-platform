@@ -291,62 +291,6 @@ def calculate_estimated_pnl(symbol: str, quantity: int, price: float, order_type
     return round(pnl, 2)
 
 
-def calculate_commission(quantity: int, price: float, order_type: OrderType, trace_id: str, order_id: str) -> float:
-    """
-    Calculate trading commission with volume-based discount tiers.
-    
-    Args:
-        quantity: Number of shares
-        price: Price per share
-        order_type: BUY or SELL (currently unused)
-        trace_id: Trace ID for logging
-        order_id: Order ID for logging
-    
-    Returns:
-        float: Commission amount rounded to 2 decimal places
-    
-    Commission Tiers:
-        - Order value > $100,000: 0.2% commission
-        - Order value > $50,000: 0.3% commission
-        - Order value ≤ $50,000: 0.5% commission (base rate)
-    
-    Note:
-        Early rounding may cause precision loss on large orders
-    """
-    logger.info("[calculate_commission] Calculating commission", 
-               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'calculate_commission'})
-    
-    base_commission = 0.005  # 0.5% base rate
-    order_value = quantity * price
-    
-    logger.info(f"[calculate_commission] Order value: ${order_value:.2f}", 
-               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'calculate_commission',
-                      'extra_data': {'order_value': order_value, 'quantity': quantity, 'price': price}})
-    
-    # Volume-based discount tiers
-    if order_value > 100000:
-        commission_rate = 0.002  # 0.2% for large orders
-        logger.info("[calculate_commission] Applied large order discount (0.2%)", 
-                   extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'calculate_commission'})
-    elif order_value > 50000:
-        commission_rate = 0.003  # 0.3% for medium orders
-        logger.info("[calculate_commission] Applied medium order discount (0.3%)", 
-                   extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'calculate_commission'})
-    else:
-        commission_rate = base_commission
-    
-    commission = order_value * commission_rate
-    
-    # Round commission to 2 decimal places for standard currency representation
-    commission_rounded = round(commission, 2)
-    
-    logger.info(f"[calculate_commission] Commission calculated: ${commission_rounded:.2f} ({commission_rate*100}% of ${order_value:.2f})", 
-               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'calculate_commission', 
-                      'extra_data': {'commission_before_rounding': commission, 'commission_final': commission_rounded, 'rate': commission_rate}})
-    
-    return commission_rounded
-
-
 def estimate_slippage(quantity: int, symbol: str, order_type: OrderType, trace_id: str, order_id: str) -> float:
     """
     Estimate price slippage based on order size and symbol volatility.
@@ -422,19 +366,6 @@ def adjust_price_for_slippage(price: float, slippage: float, order_type: OrderTy
     
     return round(adjusted_price, 2)
 
-
-def calculate_pnl(symbol: str, quantity: int, current_price: float, order_type: OrderType) -> float:
-    """
-    Calculate estimated profit/loss (simplified version for backward compatibility)
-    """
-    cost_basis = get_cost_basis(symbol)
-    
-    if order_type == OrderType.BUY:
-        pnl = -(current_price - cost_basis) * quantity
-    else:  # SELL
-        pnl = (current_price - cost_basis) * quantity
-    
-    return round(pnl, 2)
 
 
 @app.get("/")

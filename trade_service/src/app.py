@@ -298,23 +298,6 @@ def check_symbol_tradeable(symbol: str, trace_id: str, order_id: str) -> tuple[b
     return True, None
 
 
-def validate_symbol(symbol: str) -> bool:
-    """
-    Check if symbol is in the list of supported trading symbols.
-    
-    Args:
-        symbol: Stock ticker symbol
-    
-    Returns:
-        bool: True if symbol is supported, False otherwise
-    
-    Supported Symbols:
-        AAPL, GOOGL, MSFT, AMZN, TSLA, META, NVDA
-    """
-    supported_symbols = ["AAPL", "GOOGL", "MSFT", "AMZN", "TSLA", "META", "NVDA"]
-    return symbol in supported_symbols
-
-
 def normalize_quantity_to_lot_size(quantity: int, symbol: str, trace_id: str, order_id: str) -> int:
     """
     Adjust order quantity to meet exchange lot size requirements.
