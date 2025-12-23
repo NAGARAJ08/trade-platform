@@ -783,5 +783,106 @@ def get_pnl(order_id: str, request: Request):
     }
 
 
+class CancellationImpactRequest(BaseModel):
+    order_id: str
+    symbol: Optional[str] = None
+    quantity: Optional[int] = None
+    price: Optional[float] = None
+
+
+def _apply_cancellation_fees(refund_amount: float, order_value: float, trace_id: str, order_id: str) -> float:
+    logger.info("[_apply_cancellation_fees] Applying cancellation fees", 
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': '_apply_cancellation_fees'})
+    
+    cancellation_fee_rate = 0.01
+    cancellation_fee = order_value * cancellation_fee_rate
+    net_refund = refund_amount - cancellation_fee
+    
+    logger.info(f"[_apply_cancellation_fees] Cancellation fee: ${cancellation_fee:.2f}, Net refund: ${net_refund:.2f}", 
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': '_apply_cancellation_fees',
+                      'extra_data': {'cancellation_fee': cancellation_fee, 'net_refund': net_refund}})
+    
+    return max(0, net_refund)
+
+
+def _compute_refund_amount(order_value: float, fees_paid: float, trace_id: str, order_id: str) -> float:
+    logger.info("[_compute_refund_amount] Computing refund amount", 
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': '_compute_refund_amount'})
+    
+    gross_refund = order_value - fees_paid
+    
+    net_refund = _apply_cancellation_fees(gross_refund, order_value, trace_id, order_id)
+    
+    logger.info(f"[_compute_refund_amount] Gross refund: ${gross_refund:.2f}, Net refund: ${net_refund:.2f}", 
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': '_compute_refund_amount',
+                      'extra_data': {'gross_refund': gross_refund, 'net_refund': net_refund}})
+    
+    return net_refund
+
+
+def _fetch_order_pricing(order_id: str, trace_id: str) -> dict:
+    logger.info("[_fetch_order_pricing] Fetching order pricing data", 
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': '_fetch_order_pricing'})
+    
+    pricing = pricing_data.get(order_id)
+    if not pricing:
+        logger.warning("[_fetch_order_pricing] Pricing data not found", 
+                     extra={'trace_id': trace_id, 'order_id': order_id, 'function': '_fetch_order_pricing'})
+        return None
+    
+    return pricing
+
+
+def _calculate_impact_internal(order_id: str, trace_id: str) -> dict:
+    logger.info("[_calculate_impact_internal] Calculating cancellation impact internally", 
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': '_calculate_impact_internal'})
+    
+    pricing_info = _fetch_order_pricing(order_id, trace_id)
+    if not pricing_info:
+        raise HTTPException(status_code=404, detail="Order pricing data not found")
+    
+    order_value = pricing_info.get('total_cost', 0)
+    fees_paid = pricing_info.get('commission', 0) + pricing_info.get('fees', 0)
+    
+    refund_amount = _compute_refund_amount(order_value, fees_paid, trace_id, order_id)
+    
+    return {
+        'order_id': order_id,
+        'original_order_value': order_value,
+        'fees_paid': fees_paid,
+        'refund_amount': refund_amount,
+        'cancellation_fee': order_value * 0.01
+    }
+
+
+@app.post("/pricing/cancellation-impact")
+def calculate_cancellation_impact(request_data: CancellationImpactRequest, request: Request):
+    """Calculate the financial impact of cancelling an order"""
+    trace_id = get_trace_id(request.headers.get("X-Trace-Id"))
+    
+    get_trace_logger(trace_id)
+    
+    if not request_data.order_id:
+        raise HTTPException(status_code=400, detail="order_id is required")
+    
+    logger.info("[calculate_cancellation_impact] Calculating cancellation impact", 
+               extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'function': 'calculate_cancellation_impact'})
+    
+    try:
+        impact_result = _calculate_impact_internal(request_data.order_id, trace_id)
+        
+        logger.info("[calculate_cancellation_impact] Cancellation impact calculated", 
+                   extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'function': 'calculate_cancellation_impact',
+                          'extra_data': impact_result})
+        
+        return impact_result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"[calculate_cancellation_impact] Failed to calculate cancellation impact - {str(e)}", 
+                         extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'function': 'calculate_cancellation_impact'})
+        raise HTTPException(status_code=500, detail=f"Failed to calculate cancellation impact: {str(e)}")
+
+
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8002)
