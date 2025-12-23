@@ -107,7 +107,13 @@ Each function in the order flow performs a key business logic step:
 - **check_order_limits**: Validates order quantity against symbol-specific and global limits.
 - **calculate_pricing**: Computes market price, total cost, and estimated PnL for the order.
 - **get_market_price**: Simulates real-time market price with ±2% variance.
-- **calculate_total_cost**: Calculates all fees, commissions, and net cost/proceeds (includes fee  for large SELL).
+- **validate_price_components**: Level 1 validation that ensures price data is complete and properly structured before processing.
+- **check_price_range_validity**: Level 2 validation that verifies the current price falls within acceptable range of base price.
+- **verify_market_conditions**: Level 3 validation that confirms market conditions are within acceptable parameters (price > 0, not suspiciously high).
+- **calculate_total_cost**: Calculates all fees, commissions, and net cost/proceeds (includes fee for large SELL).
+- **validate_cost_breakdown**: Level 1 validation that verifies cost components (commission, fees, base amount) are properly calculated.
+- **verify_fee_calculations**: Level 2 validation that ensures fee amounts are accurate and within expected thresholds.
+- **audit_commission_rate**: Level 3 validation that confirms commission rates match approved schedules and fee structures.
 - **calculate_estimated_pnl**: Computes profit/loss based on cost basis and current price.
 - **get_cost_basis**: Retrieves average purchase price for the symbol.
 - **assess_risk**: Evaluates risk factors and compliance for the order.
@@ -115,10 +121,15 @@ Each function in the order flow performs a key business logic step:
 - **check_sector_limits**: Checks for sector exposure limits and triggers compliance delay for tech stocks.
 - **assess_order_risk**: Scores order-specific risks (large position, selling at loss, etc.).
 - **calculate_risk_score**: Aggregates all risk factors into a numeric risk score.
+- **calculate_position_size_impact**: Calculates risk points (5-30) based on position value relative to account size.
+- **calculate_pnl_risk_factor**: Calculates risk points (5-30) based on P&L characteristics (loss magnitude, profit potential).
+- **assess_quantity_risk**: Calculates risk points (5-20) based on order size and execution complexity.
+- **calculate_volatility_multiplier**: Applies volatility-based multiplier (1.0-2.5x) to risk score based on symbol's historical price swings.
+- **calculate_sector_risk_adjustment**: Applies sector-specific risk multiplier (1.0-1.3x) for industry exposure (e.g., Technology 1.25x).
+- **normalize_risk_score**: Caps risk score at 100 (maximum) and floors at 0 (minimum) to ensure consistent scale.
 - **determine_risk_level**: Maps risk score to LOW, MEDIUM, or HIGH risk category.
 - **get_recommendation**: Generates a human-readable risk recommendation for the order.
 - **execute_trade**: Finalizes the order and records execution details.
-
 ---
 
 
