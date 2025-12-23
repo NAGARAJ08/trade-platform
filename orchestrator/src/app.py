@@ -159,6 +159,9 @@ def call_service(url: str, method: str, trace_id: str, json_data: dict = None, t
     except requests.Timeout as e:
         logger.error(f"[call_service] Timeout calling {url}", extra={'trace_id': trace_id, 'function': 'call_service'})
         raise HTTPException(status_code=504, detail=f"Service timeout: {url}")
+    except requests.ConnectionError as e:
+        logger.error(f"[call_service] Connection error calling {url} - service may be down", extra={'trace_id': trace_id, 'function': 'call_service', 'extra_data': {'url': url, 'error': str(e)}})
+        raise HTTPException(status_code=503, detail=f"Service unavailable: {url}. Please ensure the service is running.")
     except requests.HTTPError as e:
         # Extract detailed error message from service response
         try:
@@ -629,6 +632,256 @@ def get_order_status(order_id: str, request: Request):
         if e.status_code == 404:
             raise HTTPException(status_code=404, detail="Order not found")
         raise
+
+
+class CancellationResponse(BaseModel):
+    order_id: str
+    status: str
+    message: str
+    trace_id: str
+    cancellation_time: str
+    details: Optional[Dict[str, Any]] = None
+
+
+def _normalize_request_data(request_data: dict, service_type: str, trace_id: str, order_id: str) -> dict:
+    normalized = {}
+    for key, value in request_data.items():
+        if value is not None:
+            normalized[key] = value
+    
+    logger.info(f"[_normalize_request_data] Normalized request for {service_type}", 
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': '_normalize_request_data',
+                      'extra_data': {'service_type': service_type, 'normalized_keys': list(normalized.keys())}})
+    
+    if 'order_id' not in normalized:
+        logger.error(f"[_normalize_request_data] Missing order_id in normalized request", 
+                    extra={'trace_id': trace_id, 'order_id': order_id, 'function': '_normalize_request_data',
+                           'extra_data': {'service_type': service_type, 'available_keys': list(normalized.keys())}})
+        raise HTTPException(status_code=400, detail="order_id is required")
+    
+    return normalized
+
+
+def _build_service_request(order_context: dict, service_type: str, trace_id: str, order_id: str) -> dict:
+    request_data = {
+        'symbol': order_context.get('symbol'),
+        'quantity': order_context.get('quantity'),
+        'price': order_context.get('price'),
+    }
+    
+    logger.info(f"[_build_service_request] Building request for {service_type}", 
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': '_build_service_request',
+                      'extra_data': {'service_type': service_type, 'request_keys': list(request_data.keys())}})
+    
+    normalized = _normalize_request_data(request_data, service_type, trace_id, order_id)
+    return normalized
+
+
+def _prepare_cancellation_payload(order_id: str, trace_id: str, service_type: str) -> dict:
+    order_context = {
+        'order_id': order_id,
+        'symbol': None,
+        'quantity': None,
+        'price': None
+    }
+    
+    logger.info(f"[_prepare_cancellation_payload] Preparing payload for {service_type}", 
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': '_prepare_cancellation_payload',
+                      'extra_data': {'service_type': service_type}})
+    
+    request_payload = _build_service_request(order_context, service_type, trace_id, order_id)
+    return request_payload
+
+
+def check_order_status(order_id: str, trace_id: str) -> dict:
+    logger.info("[check_order_status] Checking order status", 
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'check_order_status'})
+    
+    try:
+        status_result = call_service(f"{TRADE_SERVICE_URL}/trades/{order_id}/status", "GET", trace_id)
+        logger.info(f"[check_order_status] Order status retrieved", 
+                   extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'check_order_status',
+                          'extra_data': status_result})
+        return status_result
+    except HTTPException as e:
+        if e.status_code == 404:
+            logger.warning(f"[check_order_status] Order {order_id} not found", 
+                          extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'check_order_status'})
+            raise HTTPException(status_code=404, detail=f"Order {order_id} not found")
+        logger.error(f"[check_order_status] Failed to get order status", 
+                    extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'check_order_status',
+                           'extra_data': {'error': str(e.detail), 'status_code': e.status_code}})
+        raise
+
+
+def validate_cancellation_request(order_id: str, trace_id: str) -> bool:
+    logger.info("[validate_cancellation_request] Validating cancellation request", 
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'validate_cancellation_request'})
+    
+    status_info = check_order_status(order_id, trace_id)
+    
+    if status_info.get('status') not in ['EXECUTED', 'PENDING']:
+        logger.warning(f"[validate_cancellation_request] Order cannot be cancelled - status: {status_info.get('status')}", 
+                     extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'validate_cancellation_request'})
+        return False
+    
+    logger.info("[validate_cancellation_request] Cancellation request validated", 
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'validate_cancellation_request'})
+    return True
+
+
+@app.post("/orders/cancel/{order_id}", response_model=CancellationResponse)
+def cancel_order(order_id: str, request: Request):
+    """
+    Cancel an existing order
+    
+    This endpoint orchestrates the cancellation of an order by:
+    1. Validating the cancellation request
+    2. Checking order status
+    3. Calculating cancellation impact
+    4. Assessing risk of cancellation
+    5. Processing the cancellation
+    """
+    trace_id = get_trace_id(request.headers.get("X-Trace-Id"))
+    
+    get_trace_logger(trace_id)
+    
+    overall_start = time_module.time()
+    
+    user_provided_inputs = {
+        'order_id': order_id,
+        'endpoint': '/orders/cancel/{order_id}',
+        'method': 'POST'
+    }
+    
+    logger.info("[cancel_order] Order cancellation initiated", 
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'cancel_order',
+                      'extra_data': {'workflow_name': 'order_cancellation', 'user_provided_inputs': user_provided_inputs}})
+    
+    function_stack = ['cancel_order']
+    service_calls_made = []
+    
+    try:
+        if not validate_cancellation_request(order_id, trace_id):
+            raise HTTPException(status_code=400, detail="Order cannot be cancelled in its current state")
+        
+        function_stack.append('validate_cancellation_request')
+        function_stack.append('check_order_status')
+        
+        logger.info("[cancel_order] Step 1: Getting order details for cancellation impact calculation", 
+                   extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'cancel_order'})
+        
+        order_details = call_service(f"{TRADE_SERVICE_URL}/trades/{order_id}", "GET", trace_id)
+        service_calls_made.append({'service': 'trade_service', 'endpoint': f'/trades/{order_id}', 'status': 'success'})
+        function_stack.append('call_service')
+        
+        logger.info("[cancel_order] Step 2: Calculating cancellation impact", 
+                   extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'cancel_order'})
+        
+        cancellation_payload = _prepare_cancellation_payload(order_id, trace_id, 'pricing_service')
+        function_stack.append('_prepare_cancellation_payload')
+        function_stack.append('_build_service_request')
+        function_stack.append('_normalize_request_data')
+        
+        impact_result = call_service(
+            f"{PRICING_PNL_SERVICE_URL}/pricing/cancellation-impact",
+            "POST",
+            trace_id,
+            cancellation_payload
+        )
+        service_calls_made.append({'service': 'pricing_service', 'endpoint': '/pricing/cancellation-impact', 'status': 'success'})
+        
+        logger.info("[cancel_order] Step 3: Assessing cancellation risk", 
+                   extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'cancel_order'})
+        
+        risk_payload = _prepare_cancellation_payload(order_id, trace_id, 'risk_service')
+        risk_result = call_service(
+            f"{RISK_SERVICE_URL}/risk/cancellation-assess",
+            "POST",
+            trace_id,
+            risk_payload
+        )
+        service_calls_made.append({'service': 'risk_service', 'endpoint': '/risk/cancellation-assess', 'status': 'success'})
+        
+        logger.info("[cancel_order] Step 4: Processing cancellation", 
+                   extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'cancel_order'})
+        
+        cancel_payload = _prepare_cancellation_payload(order_id, trace_id, 'trade_service')
+        cancel_result = call_service(
+            f"{TRADE_SERVICE_URL}/trades/{order_id}/cancel",
+            "POST",
+            trace_id,
+            cancel_payload
+        )
+        service_calls_made.append({'service': 'trade_service', 'endpoint': f'/trades/{order_id}/cancel', 'status': 'success'})
+        
+        cancellation_time = datetime.now().isoformat()
+        overall_duration_ms = int((time_module.time() - overall_start) * 1000)
+        
+        logger.info("[cancel_order] Order cancellation completed successfully", 
+                   extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'cancel_order',
+                          'extra_data': {'status': 'CANCELLED', 'duration_ms': overall_duration_ms}})
+        
+        return CancellationResponse(
+            order_id=order_id,
+            status="CANCELLED",
+            message=f"Order {order_id} cancelled successfully",
+            trace_id=trace_id,
+            cancellation_time=cancellation_time,
+            details={
+                'impact': impact_result,
+                'risk_assessment': risk_result,
+                'cancellation_details': cancel_result,
+                'service_calls': service_calls_made
+            }
+        )
+        
+    except HTTPException as e:
+        overall_duration_ms = int((time_module.time() - overall_start) * 1000)
+        
+        missing_data = []
+        if 'order_id' in str(e.detail).lower():
+            missing_data.append('order_id')
+        
+        logger.error(f"[cancel_order] Order cancellation failed - {str(e.detail)}", 
+                   extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'cancel_order',
+                          'extra_data': {
+                              'workflow_name': 'order_cancellation',
+                              'endpoint': '/orders/cancel/{order_id}',
+                              'user_provided_inputs': user_provided_inputs,
+                              'function_stack': function_stack,
+                              'stack_depth': len(function_stack),
+                              'service_calls_made': service_calls_made,
+                              'failing_service_call': service_calls_made[-1] if service_calls_made else None,
+                              'missing_data': missing_data,
+                              'error_source': function_stack[-1] if function_stack else 'unknown',
+                              'input_validation': {
+                                  'user_provided_order_id': order_id,
+                                  'order_id_in_request': 'missing' if missing_data else 'present'
+                              },
+                              'total_duration_ms': overall_duration_ms,
+                              'status_code': e.status_code
+                          }})
+        
+        raise HTTPException(status_code=e.status_code, detail=str(e.detail))
+        
+    except Exception as e:
+        overall_duration_ms = int((time_module.time() - overall_start) * 1000)
+        
+        logger.exception(f"[cancel_order] Order cancellation failed unexpectedly - {str(e)}", 
+                        extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'cancel_order',
+                               'extra_data': {
+                                   'workflow_name': 'order_cancellation',
+                                   'endpoint': '/orders/cancel/{order_id}',
+                                   'user_provided_inputs': user_provided_inputs,
+                                   'function_stack': function_stack,
+                                   'stack_depth': len(function_stack),
+                                   'service_calls_made': service_calls_made,
+                                   'error_type': type(e).__name__,
+                                   'total_duration_ms': overall_duration_ms
+                               }})
+        
+        raise HTTPException(status_code=500, detail=f"Order cancellation failed: {str(e)}")
 
 
 if __name__ == "__main__":

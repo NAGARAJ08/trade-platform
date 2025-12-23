@@ -714,5 +714,115 @@ def list_risk_assessments(request: Request):
     }
 
 
+class CancellationRiskRequest(BaseModel):
+    order_id: str
+    symbol: Optional[str] = None
+    quantity: Optional[int] = None
+    price: Optional[float] = None
+
+
+def _determine_cancellation_approval(risk_score: float, risk_factors: dict, trace_id: str, order_id: str) -> bool:
+    logger.info("[_determine_cancellation_approval] Determining cancellation approval", 
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': '_determine_cancellation_approval'})
+    
+    if risk_score > 50:
+        logger.warning(f"[_determine_cancellation_approval] High risk score {risk_score}, cancellation may need review", 
+                     extra={'trace_id': trace_id, 'order_id': order_id, 'function': '_determine_cancellation_approval'})
+        return False
+    
+    logger.info("[_determine_cancellation_approval] Cancellation approved", 
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': '_determine_cancellation_approval'})
+    return True
+
+
+def _calculate_risk_impact(order_value: float, position_size: int, trace_id: str, order_id: str) -> tuple[float, dict]:
+    logger.info("[_calculate_risk_impact] Calculating risk impact of cancellation", 
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': '_calculate_risk_impact'})
+    
+    risk_score = 0
+    risk_factors = {}
+    
+    if order_value > 100000:
+        risk_score += 30
+        risk_factors['large_order_cancellation'] = 30
+    
+    if position_size > 500:
+        risk_score += 20
+        risk_factors['large_position_cancellation'] = 20
+    
+    approved = _determine_cancellation_approval(risk_score, risk_factors, trace_id, order_id)
+    
+    logger.info(f"[_calculate_risk_impact] Risk score: {risk_score}, Approved: {approved}", 
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': '_calculate_risk_impact',
+                      'extra_data': {'risk_score': risk_score, 'risk_factors': risk_factors, 'approved': approved}})
+    
+    return risk_score, risk_factors
+
+
+def _evaluate_cancellation_factors(order_id: str, trace_id: str) -> dict:
+    logger.info("[_evaluate_cancellation_factors] Evaluating cancellation risk factors", 
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': '_evaluate_cancellation_factors'})
+    
+    assessment = risk_assessments.get(order_id)
+    if not assessment:
+        return {'order_value': 0, 'position_size': 0}
+    
+    order_value = assessment.get('risk_factors', {}).get('position_value', 0)
+    position_size = assessment.get('risk_factors', {}).get('quantity', 0)
+    
+    risk_score, risk_factors = _calculate_risk_impact(order_value, position_size, trace_id, order_id)
+    
+    return {
+        'order_value': order_value,
+        'position_size': position_size,
+        'risk_score': risk_score,
+        'risk_factors': risk_factors
+    }
+
+
+def _assess_risk_internal(order_id: str, trace_id: str) -> dict:
+    logger.info("[_assess_risk_internal] Assessing cancellation risk internally", 
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': '_assess_risk_internal'})
+    
+    risk_evaluation = _evaluate_cancellation_factors(order_id, trace_id)
+    
+    return {
+        'order_id': order_id,
+        'risk_level': 'HIGH' if risk_evaluation.get('risk_score', 0) > 50 else 'MEDIUM',
+        'risk_score': risk_evaluation.get('risk_score', 0),
+        'risk_factors': risk_evaluation.get('risk_factors', {}),
+        'approved': risk_evaluation.get('risk_score', 0) <= 50
+    }
+
+
+@app.post("/risk/cancellation-assess")
+def assess_cancellation_risk(request_data: CancellationRiskRequest, request: Request):
+    """Assess the risk of cancelling an order"""
+    trace_id = get_trace_id(request.headers.get("X-Trace-Id"))
+    
+    get_trace_logger(trace_id)
+    
+    if not request_data.order_id:
+        raise HTTPException(status_code=400, detail="order_id is required")
+    
+    logger.info("[assess_cancellation_risk] Assessing cancellation risk", 
+               extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'function': 'assess_cancellation_risk'})
+    
+    try:
+        risk_assessment = _assess_risk_internal(request_data.order_id, trace_id)
+        
+        logger.info("[assess_cancellation_risk] Cancellation risk assessment completed", 
+                   extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'function': 'assess_cancellation_risk',
+                          'extra_data': risk_assessment})
+        
+        return risk_assessment
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"[assess_cancellation_risk] Failed to assess cancellation risk - {str(e)}", 
+                         extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'function': 'assess_cancellation_risk'})
+        raise HTTPException(status_code=500, detail=f"Failed to assess cancellation risk: {str(e)}")
+
+
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8003)

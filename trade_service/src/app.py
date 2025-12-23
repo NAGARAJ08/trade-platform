@@ -673,5 +673,155 @@ def list_trades(request: Request):
     return {"trades": list(trades_db.values()), "count": len(trades_db)}
 
 
+def _format_trade_response(trade_data: dict, trace_id: str, order_id: str) -> dict:
+    logger.info("[_format_trade_response] Formatting trade response", 
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': '_format_trade_response'})
+    
+    formatted = {
+        'order_id': trade_data.get('order_id'),
+        'symbol': trade_data.get('symbol'),
+        'quantity': trade_data.get('quantity'),
+        'price': trade_data.get('price'),
+        'status': trade_data.get('status'),
+        'execution_time': trade_data.get('execution_time')
+    }
+    
+    return formatted
+
+
+def _retrieve_trade_data(order_id: str, trace_id: str) -> dict:
+    logger.info("[_retrieve_trade_data] Retrieving trade data from database", 
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': '_retrieve_trade_data'})
+    
+    trade_data = trades_db.get(order_id)
+    if not trade_data:
+        return None
+    
+    formatted = _format_trade_response(trade_data, trace_id, order_id)
+    return formatted
+
+
+def _validate_trade_exists(order_id: str, trace_id: str) -> bool:
+    logger.info("[_validate_trade_exists] Validating trade exists", 
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': '_validate_trade_exists'})
+    
+    trade_data = _retrieve_trade_data(order_id, trace_id)
+    if not trade_data:
+        return False
+    
+    return True
+
+
+def _fetch_trade_internal(order_id: str, trace_id: str) -> dict:
+    logger.info("[_fetch_trade_internal] Fetching trade internally", 
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': '_fetch_trade_internal'})
+    
+    if not _validate_trade_exists(order_id, trace_id):
+        raise HTTPException(status_code=404, detail="Trade not found")
+    
+    trade_data = _retrieve_trade_data(order_id, trace_id)
+    return trade_data
+
+
+@app.get("/trades/{order_id}/status")
+def get_trade_status(order_id: str, request: Request):
+    """Get status of a trade by order ID"""
+    trace_id = get_trace_id(request.headers.get("X-Trace-Id"))
+    
+    get_trace_logger(trace_id)
+    
+    logger.info("[get_trade_status] Fetching trade status", 
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'get_trade_status'})
+    
+    trade_data = _fetch_trade_internal(order_id, trace_id)
+    
+    return {
+        "order_id": order_id,
+        "status": trade_data.get('status'),
+        "symbol": trade_data.get('symbol'),
+        "quantity": trade_data.get('quantity'),
+        "price": trade_data.get('price'),
+        "execution_time": trade_data.get('execution_time')
+    }
+
+
+def _update_trade_status(order_id: str, new_status: str, trace_id: str) -> dict:
+    logger.info(f"[_update_trade_status] Updating trade status to {new_status}", 
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': '_update_trade_status'})
+    
+    if order_id not in trades_db:
+        raise HTTPException(status_code=404, detail="Trade not found")
+    
+    trades_db[order_id]['status'] = new_status
+    trades_db[order_id]['cancellation_time'] = datetime.now().isoformat()
+    
+    return trades_db[order_id]
+
+
+def _process_cancellation(order_id: str, trace_id: str) -> dict:
+    logger.info("[_process_cancellation] Processing cancellation", 
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': '_process_cancellation'})
+    
+    updated_trade = _update_trade_status(order_id, 'CANCELLED', trace_id)
+    return updated_trade
+
+
+def _validate_cancellation(order_id: str, trace_id: str) -> bool:
+    logger.info("[_validate_cancellation] Validating cancellation eligibility", 
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': '_validate_cancellation'})
+    
+    trade_data = _fetch_trade_internal(order_id, trace_id)
+    current_status = trade_data.get('status')
+    
+    if current_status not in ['EXECUTED', 'PENDING']:
+        logger.warning(f"[_validate_cancellation] Cannot cancel trade with status {current_status}", 
+                     extra={'trace_id': trace_id, 'order_id': order_id, 'function': '_validate_cancellation'})
+        return False
+    
+    return True
+
+
+def _cancel_trade_internal(order_id: str, trace_id: str) -> dict:
+    logger.info("[_cancel_trade_internal] Cancelling trade internally", 
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': '_cancel_trade_internal'})
+    
+    if not _validate_cancellation(order_id, trace_id):
+        raise HTTPException(status_code=400, detail="Trade cannot be cancelled in its current state")
+    
+    cancelled_trade = _process_cancellation(order_id, trace_id)
+    return cancelled_trade
+
+
+@app.post("/trades/{order_id}/cancel")
+def cancel_trade(order_id: str, request: Request):
+    """Cancel a trade by order ID"""
+    trace_id = get_trace_id(request.headers.get("X-Trace-Id"))
+    
+    get_trace_logger(trace_id)
+    
+    logger.info("[cancel_trade] Trade cancellation request received", 
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'cancel_trade'})
+    
+    try:
+        cancelled_trade = _cancel_trade_internal(order_id, trace_id)
+        
+        logger.info("[cancel_trade] Trade cancelled successfully", 
+                   extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'cancel_trade',
+                          'extra_data': {'status': 'CANCELLED'}})
+        
+        return {
+            "order_id": order_id,
+            "status": "CANCELLED",
+            "message": f"Trade {order_id} cancelled successfully",
+            "cancellation_time": cancelled_trade.get('cancellation_time')
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"[cancel_trade] Trade cancellation failed - {str(e)}", 
+                         extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'cancel_trade'})
+        raise HTTPException(status_code=500, detail=f"Trade cancellation failed: {str(e)}")
+
+
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8001)
