@@ -1087,7 +1087,8 @@ def place_algo_order(order: OrderRequest, request: Request):
             "symbol": order.symbol,
             "quantity": order.quantity,
             "price": pricing_result.get("price"),
-            "strategy_id": "MOMENTUM_v2"
+            "pnl": pricing_result.get("estimated_pnl", 0.0),
+            "order_type": order.order_type.value
         }
         
         risk_start = time_module.time()
