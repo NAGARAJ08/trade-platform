@@ -975,18 +975,17 @@ def apply_volume_discount(quantity: int, base_price: float, trace_id: str, order
 
 
 @app.post("/pricing/calculate-institutional")
-async def calculate_institutional_pricing(request: Request):
+def calculate_institutional_pricing(request_data: PricingRequest, request: Request):
     """
     WORKFLOW 2: Institutional Pricing Calculation
     Applies volume discounts and institutional commission rates.
     """
     trace_id = get_trace_id(request.headers.get("X-Trace-Id"))
-    data = await request.json()
     
-    order_id = data.get('order_id')
-    symbol = data.get('symbol')
-    quantity = data.get('quantity')
-    order_type = OrderType(data.get('order_type'))
+    order_id = request_data.order_id
+    symbol = request_data.symbol
+    quantity = request_data.quantity
+    order_type = request_data.order_type
     
     get_trace_logger(trace_id)
     
@@ -1035,18 +1034,17 @@ async def calculate_institutional_pricing(request: Request):
 
 
 @app.post("/pricing/algo-fast")
-async def calculate_algo_pricing(request: Request):
+def calculate_algo_pricing(request_data: PricingRequest, request: Request):
     """
     WORKFLOW 3: Fast Algo Pricing
     Lightweight pricing for high-frequency algo trading.
     """
     trace_id = get_trace_id(request.headers.get("X-Trace-Id"))
-    data = await request.json()
     
-    order_id = data.get('order_id')
-    symbol = data.get('symbol')
-    quantity = data.get('quantity')
-    order_type = OrderType(data.get('order_type'))
+    order_id = request_data.order_id
+    symbol = request_data.symbol
+    quantity = request_data.quantity
+    order_type = request_data.order_type
     
     get_trace_logger(trace_id)
     

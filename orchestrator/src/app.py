@@ -157,7 +157,9 @@ def call_service(url: str, method: str, trace_id: str, json_data: dict = None, t
         response.raise_for_status()
         return response.json()
     except requests.Timeout as e:
-        logger.error(f"[call_service] Timeout calling {url}", extra={'trace_id': trace_id, 'function': 'call_service'})
+        logger.exception(f"[call_service] Timeout exception calling {url}", 
+                        extra={'trace_id': trace_id, 'function': 'call_service', 'url': url},
+                        exc_info=True)
         raise HTTPException(status_code=504, detail=f"Service timeout: {url}")
     except requests.HTTPError as e:
         # Extract detailed error message from service response
@@ -165,12 +167,96 @@ def call_service(url: str, method: str, trace_id: str, json_data: dict = None, t
             error_detail = e.response.json().get('detail', f"Service error: {url}")
         except:
             error_detail = f"Service error: {url}"
-        logger.error(f"[call_service] HTTP error calling {url} - status {e.response.status_code}: {error_detail}", 
-                    extra={'trace_id': trace_id, 'function': 'call_service', 'extra_data': {'status_code': e.response.status_code, 'error_detail': error_detail}})
+        logger.exception(f"[call_service] HTTPError calling {url}", 
+                    extra={'trace_id': trace_id, 'function': 'call_service', 
+                           'url': url, 'status_code': e.response.status_code, 
+                           'response_body': error_detail},
+                    exc_info=True)
         raise HTTPException(status_code=e.response.status_code, detail=error_detail)
     except Exception as e:
-        logger.exception(f"[call_service] Error calling {url} - {str(e)}", extra={'trace_id': trace_id, 'function': 'call_service', 'extra_data': {'url': url, 'error_type': type(e).__name__}})
+        logger.exception(f"[call_service] Unexpected exception calling {url}", 
+                        extra={'trace_id': trace_id, 'function': 'call_service', 
+                               'url': url, 'error_type': type(e).__name__},
+                        exc_info=True)
         raise HTTPException(status_code=500, detail=f"Service call failed: {url}")
+
+
+def build_error_response(order_id: str, trace_id: str, overall_start: float, 
+                        trade_result: Optional[Dict], pricing_result: Optional[Dict], 
+                        risk_result: Optional[Dict], exception: HTTPException, 
+                        workflow_type: str = "retail") -> OrderResponse:
+    """
+    Build standardized error response with execution_flow breakdown.
+    Used by all three workflows (retail, institutional, algo).
+    """
+    # Determine failure stage
+    if not trade_result:
+        failure_stage = "validation"
+    elif not pricing_result:
+        failure_stage = "pricing_calculation"
+    elif not risk_result:
+        failure_stage = "risk_assessment"
+    else:
+        failure_stage = "execution"
+    
+    # Build execution flow showing completed stages
+    execution_flow = {}
+    
+    if trade_result:
+        execution_flow["validation"] = {
+            "status": "passed",
+            "normalized_quantity": trade_result.get('normalized_quantity'),
+            "timestamp": trade_result.get('timestamp')
+        }
+    
+    if pricing_result:
+        execution_flow["pricing_calculation"] = {
+            "execution_price": pricing_result.get('price'),
+            "total_cost": pricing_result.get('total_cost'),
+            "estimated_pnl": pricing_result.get('estimated_pnl'),
+            "commission": pricing_result.get('commission'),
+            "fees": pricing_result.get('fees'),
+            "base_amount": pricing_result.get('base_amount'),
+            "timestamp": pricing_result.get('timestamp')
+        }
+    
+    if risk_result:
+        execution_flow["risk_assessment"] = {
+            "risk_score": risk_result.get('risk_score'),
+            "approved": risk_result.get('approved'),
+            "timestamp": risk_result.get('timestamp')
+        }
+    
+    # Add failure information
+    execution_flow["failure"] = {
+        "stage": failure_stage,
+        "message": str(exception.detail),
+        "status_code": exception.status_code
+    }
+    
+    # Calculate overall duration
+    overall_duration_ms = int((time_module.time() - overall_start) * 1000)
+    
+    logger.exception(f"[place_{workflow_type}_order] Order failed after {overall_duration_ms}ms at {failure_stage}", 
+                extra={'trace_id': trace_id, 'order_id': order_id, 
+                       'function': f'place_{workflow_type}_order',
+                       'extra_data': {
+                           'total_duration_ms': overall_duration_ms, 
+                           'status': 'FAILED', 
+                           'failure_stage': failure_stage
+                       }},
+                exc_info=True)
+    
+    return OrderResponse(
+        order_id=order_id,
+        status="FAILED",
+        message=f"{workflow_type.capitalize()} order failed at {failure_stage.replace('_', ' ')}: {str(exception.detail)}",
+        trace_id=trace_id,
+        latency_ms=overall_duration_ms,
+        details={
+            "execution_flow": execution_flow
+        }
+    )
 
 
 @app.get("/")
@@ -185,10 +271,11 @@ def health_check():
     return {"status": "healthy", "service": "orchestrator"}
 
 
-@app.post("/orders", response_model=OrderResponse)
+@app.post("/orders/retail", response_model=OrderResponse)
 def place_order(order: OrderRequest, request: Request):
     """
-    Place a new order - orchestrates the entire trade flow
+    WORKFLOW 1: Retail Order Flow
+    Place order for retail/individual investors
     
     Example payload:
     {
@@ -592,7 +679,7 @@ def place_order(order: OrderRequest, request: Request):
         )
         
     except HTTPException as e:
-        logger.error(f"[place_order] Order placement failed - {str(e.detail)}", extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order'})
+        logger.exception(f"[place_order] Order placement failed", extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order'}, exc_info=True)
         
         # Determine failure stage
         if not trade_result:
@@ -646,9 +733,10 @@ def place_order(order: OrderRequest, request: Request):
         # Calculate overall duration even for failures
         overall_duration_ms = int((time_module.time() - overall_start) * 1000)
         
-        logger.error(f"[place_order] Order failed after {overall_duration_ms}ms - {str(e.detail)}", 
+        logger.exception(f"[place_order] Order failed after {overall_duration_ms}ms", 
                     extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order', 
-                           'extra_data': {'total_duration_ms': overall_duration_ms, 'status': 'FAILED', 'failure_stage': failure_stage}})
+                           'extra_data': {'total_duration_ms': overall_duration_ms, 'status': 'FAILED', 'failure_stage': failure_stage}},
+                    exc_info=True)
         
         return OrderResponse(
             order_id=order_id,
@@ -661,8 +749,8 @@ def place_order(order: OrderRequest, request: Request):
             }
         )
     except Exception as e:
-        logger.exception(f"[place_order] Order placement failed - {str(e)}", extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order', 'extra_data': {'error_type': type(e).__name__}})
-        raise HTTPException(status_code=500, detail=f"Order placement failed: {str(e)}")
+        logger.exception(f"[place_order] Order placement failed", extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order', 'extra_data': {'error_type': type(e).__name__}}, exc_info=True)
+        raise HTTPException(status_code=500, detail="Order placement failed")
 
 
 
@@ -849,20 +937,56 @@ def place_institutional_order(order: OrderRequest, request: Request):
             trace_id=trace_id,
             latency_ms=overall_duration_ms,
             details={
-                'trade': trade_result,
-                'pricing': pricing_result,
-                'risk': risk_result,
-                'execution': execution_result
+                "execution_flow": {
+                    "validation": {
+                        "status": "passed",
+                        "normalized_quantity": actual_quantity,
+                        "duration_ms": validation_duration_ms,
+                        "timestamp": trade_result.get('timestamp')
+                    },
+                    "pricing_calculation": {
+                        "execution_price": pricing_result.get('price'),
+                        "total_cost": pricing_result.get('total_cost'),
+                        "estimated_pnl": pricing_result.get('estimated_pnl'),
+                        "commission": pricing_result.get('commission'),
+                        "fees": pricing_result.get('fees'),
+                        "base_amount": pricing_result.get('base_amount'),
+                        "volume_discount": pricing_result.get('volume_discount'),
+                        "duration_ms": pricing_duration_ms,
+                        "timestamp": pricing_result.get('timestamp')
+                    },
+                    "risk_assessment": {
+                        "risk_score": risk_result.get('risk_score'),
+                        "approved": risk_result.get('approved'),
+                        "aggregate_exposure": risk_result.get('aggregate_exposure'),
+                        "regulatory_compliance": risk_result.get('regulatory_compliance'),
+                        "duration_ms": risk_duration_ms,
+                        "timestamp": risk_result.get('timestamp')
+                    },
+                    "execution": {
+                        "status": execution_result.get('status'),
+                        "execution_time": execution_result.get('execution_time')
+                    }
+                }
             }
         )
         
     except HTTPException as e:
-        logger.error(f"[place_institutional_order] Institutional order failed: {str(e.detail)}", 
-                    extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_institutional_order'})
-        raise e
+        return build_error_response(
+            order_id=order_id,
+            trace_id=trace_id,
+            overall_start=overall_start,
+            trade_result=trade_result,
+            pricing_result=pricing_result,
+            risk_result=risk_result,
+            exception=e,
+            workflow_type="institutional"
+        )
     except Exception as e:
-        logger.exception(f"[place_institutional_order] Unexpected error: {str(e)}", 
-                        extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_institutional_order'})
+        logger.exception(f"[place_institutional_order] Unexpected exception during institutional order processing", 
+                        extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_institutional_order',
+                               'error_type': type(e).__name__},
+                        exc_info=True)
         raise HTTPException(status_code=500, detail="Institutional order processing failed")
 
 
@@ -889,6 +1013,10 @@ def place_algo_order(order: OrderRequest, request: Request):
                 extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_algo_order'})
     logger.info(f"[place_algo_order] Params - symbol: {order.symbol}, quantity: {order.quantity}, order_type: {order.order_type}", 
                 extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_algo_order'})
+    
+    trade_result = None
+    pricing_result = None
+    risk_result = None
     
     try:
         # Step 1: Validate algo credentials and strategy limits
@@ -1018,20 +1146,53 @@ def place_algo_order(order: OrderRequest, request: Request):
             trace_id=trace_id,
             latency_ms=overall_duration_ms,
             details={
-                'trade': trade_result,
-                'pricing': pricing_result,
-                'risk': risk_result,
-                'execution': execution_result
+                "execution_flow": {
+                    "validation": {
+                        "status": "passed",
+                        "strategy_id": "MOMENTUM_v2",
+                        "normalized_quantity": trade_result.get('normalized_quantity'),
+                        "duration_ms": validation_duration_ms,
+                        "timestamp": trade_result.get('timestamp')
+                    },
+                    "pricing_calculation": {
+                        "execution_price": pricing_result.get('price'),
+                        "total_cost": pricing_result.get('total_cost'),
+                        "commission": pricing_result.get('commission'),
+                        "algo_trading": pricing_result.get('algo_trading'),
+                        "duration_ms": pricing_duration_ms,
+                        "timestamp": pricing_result.get('timestamp')
+                    },
+                    "risk_assessment": {
+                        "approved": risk_result.get('approved'),
+                        "quick_risk_score": risk_result.get('quick_risk_score'),
+                        "strategy_id": risk_result.get('strategy_id'),
+                        "duration_ms": risk_duration_ms,
+                        "timestamp": risk_result.get('timestamp')
+                    },
+                    "execution": {
+                        "status": execution_result.get('status'),
+                        "execution_time": execution_result.get('execution_time')
+                    }
+                }
             }
         )
         
     except HTTPException as e:
-        logger.error(f"[place_algo_order] Algo order failed: {str(e.detail)}", 
-                    extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_algo_order'})
-        raise e
+        return build_error_response(
+            order_id=order_id,
+            trace_id=trace_id,
+            overall_start=overall_start,
+            trade_result=trade_result,
+            pricing_result=pricing_result,
+            risk_result=risk_result,
+            exception=e,
+            workflow_type="algo"
+        )
     except Exception as e:
-        logger.exception(f"[place_algo_order] Unexpected error: {str(e)}", 
-                        extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_algo_order'})
+        logger.exception(f"[place_algo_order] Unexpected exception during algo order processing", 
+                        extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_algo_order',
+                               'error_type': type(e).__name__},
+                        exc_info=True)
         raise HTTPException(status_code=500, detail="Algo order processing failed")
 
 

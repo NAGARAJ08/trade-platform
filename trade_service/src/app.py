@@ -795,18 +795,17 @@ def verify_custodian_account(order_id: str, trace_id: str) -> bool:
 
 
 @app.post("/trades/validate-institutional")
-async def validate_institutional_order(request: Request):
+def validate_institutional_order(trade: TradeValidationRequest, request: Request):
     """
     WORKFLOW 2: Institutional Order Validation
     Validates orders from institutional clients with higher limits and special compliance.
     """
     trace_id = get_trace_id(request.headers.get("X-Trace-Id"))
-    data = await request.json()
     
-    order_id = data.get('order_id')
-    symbol = data.get('symbol')
-    quantity = data.get('quantity')
-    order_type = OrderType(data.get('order_type'))
+    order_id = trade.order_id
+    symbol = trade.symbol
+    quantity = trade.quantity
+    order_type = trade.order_type
     
     get_trace_logger(trace_id)
     
@@ -926,19 +925,17 @@ def verify_strategy_limits(strategy_id: str, trace_id: str, order_id: str) -> bo
 
 
 @app.post("/trades/validate-algo")
-async def validate_algo_order(request: Request):
+def validate_algo_order(trade: TradeValidationRequest, request: Request, strategy_id: str = 'MOMENTUM_v2'):
     """
-    WORKFLOW 3: Algorithmic Trading Validation
-    Fast validation for algo trading with circuit breakers and strategy limits.
+    WORKFLOW 3: Algorithmic Trading Order Validation
+    Fast validation for algo trading with circuit breakers.
     """
     trace_id = get_trace_id(request.headers.get("X-Trace-Id"))
-    data = await request.json()
     
-    order_id = data.get('order_id')
-    symbol = data.get('symbol')
-    quantity = data.get('quantity')
-    order_type = OrderType(data.get('order_type'))
-    strategy_id = data.get('strategy_id', 'UNKNOWN')
+    order_id = trade.order_id
+    symbol = trade.symbol
+    quantity = trade.quantity
+    order_type = trade.order_type
     
     get_trace_logger(trace_id)
     

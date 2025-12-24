@@ -15,7 +15,7 @@ Three distinct workflows for semantic search-based RCA:
 
 ### Endpoint
 ```
-POST http://localhost:8000/orders
+POST http://localhost:8000/orders/retail
 ```
 
 ### Payload
@@ -238,7 +238,7 @@ $retailPayload = @{
     user_id = "user_12345"
 } | ConvertTo-Json
 
-Invoke-RestMethod -Uri "http://localhost:8000/orders" -Method Post -Body $retailPayload -ContentType "application/json"
+Invoke-RestMethod -Uri "http://localhost:8000/orders/retail" -Method Post -Body $retailPayload -ContentType "application/json"
 ```
 
 ### 3. Test Institutional Workflow

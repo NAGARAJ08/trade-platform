@@ -1250,20 +1250,19 @@ def assess_regulatory_risk(symbol: str, quantity: int, price: float, trace_id: s
 
 
 @app.post("/risk/assess-institutional")
-async def assess_institutional_risk(request: Request):
+def assess_institutional_risk(request_data: RiskAssessmentRequest, request: Request):
     """
     WORKFLOW 2: Institutional Risk Assessment
     Comprehensive risk analysis with regulatory compliance and aggregate exposure checks.
     """
     trace_id = get_trace_id(request.headers.get("X-Trace-Id"))
-    data = await request.json()
     
-    order_id = data.get('order_id')
-    symbol = data.get('symbol')
-    quantity = data.get('quantity')
-    price = data.get('price')
-    estimated_pnl = data.get('estimated_pnl', 0.0)
-    order_type = OrderType(data.get('order_type'))
+    order_id = request_data.order_id
+    symbol = request_data.symbol
+    quantity = request_data.quantity
+    price = request_data.price
+    estimated_pnl = request_data.pnl
+    order_type = request_data.order_type
     
     get_trace_logger(trace_id)
     
@@ -1358,18 +1357,16 @@ def check_strategy_correlation(strategy_id: str, symbol: str, trace_id: str, ord
 
 
 @app.post("/risk/pre-trade-check")
-async def pre_trade_check(request: Request):
+def pre_trade_check(request_data: RiskAssessmentRequest, request: Request, strategy_id: str = 'MOMENTUM_v2'):
     """
     WORKFLOW 3: Fast Pre-Trade Check for Algo Trading
     Lightweight risk validation optimized for speed.
     """
     trace_id = get_trace_id(request.headers.get("X-Trace-Id"))
-    data = await request.json()
     
-    order_id = data.get('order_id')
-    symbol = data.get('symbol')
-    quantity = data.get('quantity')
-    strategy_id = data.get('strategy_id', 'MOMENTUM_v2')
+    order_id = request_data.order_id
+    symbol = request_data.symbol
+    quantity = request_data.quantity
     
     get_trace_logger(trace_id)
     
