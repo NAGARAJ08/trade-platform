@@ -109,6 +109,14 @@ class TradeExecutionResponse(BaseModel):
     price: float
 
 
+class ExpressValidationRequest(BaseModel):
+    order_id: str
+    symbol: str
+    quantity: int
+    price: float
+    order_type: OrderType
+
+
 def get_trace_id(x_trace_id: Optional[str] = Header(None)) -> str:
     """Generate or use existing trace ID"""
     return x_trace_id or str(uuid.uuid4())
@@ -668,7 +676,7 @@ def list_trades(request: Request):
 
 
 @app.post("/trades/validate-express")
-async def validate_express_order(request: Request):
+def validate_express_order(express_data: ExpressValidationRequest, request: Request):
     """
     WORKFLOW 4: Express Order Fast-Track Validation
     Called for small orders (< $10K) to skip heavy validations
@@ -676,13 +684,12 @@ async def validate_express_order(request: Request):
     Skips: check_sector_limits, portfolio_concentration, deep compliance
     """
     trace_id = get_trace_id(request.headers.get("X-Trace-Id"))
-    data = await request.json()
     
-    order_id = data.get('order_id')
-    symbol = data.get('symbol')
-    quantity = data.get('quantity')
-    price = data.get('price', 0)
-    order_type = OrderType(data.get('order_type', 'BUY'))
+    order_id = express_data.order_id
+    symbol = express_data.symbol
+    quantity = express_data.quantity
+    price = express_data.price
+    order_type = express_data.order_type
     
     get_trace_logger(trace_id)
     

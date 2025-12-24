@@ -98,6 +98,13 @@ class PricingResponse(BaseModel):
     timestamp: str
 
 
+class TaxAnalysisRequest(BaseModel):
+    order_id: str
+    symbol: str
+    pnl: float
+    quantity: int
+
+
 def get_trace_id(x_trace_id: Optional[str] = Header(None)) -> str:
     """Generate or use existing trace ID"""
     return x_trace_id or str(uuid.uuid4())
@@ -900,19 +907,18 @@ def get_pnl(order_id: str, request: Request):
 
 
 @app.post("/pricing/tax-analysis")
-async def analyze_tax_implications(request: Request):
+def analyze_tax_implications(tax_data: TaxAnalysisRequest, request: Request):
     """
     WORKFLOW 3: SELL at Loss Tax Analysis Workflow
     Called ONLY when order_type=SELL AND pnl < 0
     Creates different call chain: calculate_tax_implications → check_wash_sale_rule → verify_cost_basis_accuracy
     """
     trace_id = get_trace_id(request.headers.get("X-Trace-Id"))
-    data = await request.json()
     
-    order_id = data.get('order_id')
-    symbol = data.get('symbol')
-    pnl = data.get('pnl')
-    quantity = data.get('quantity')
+    order_id = tax_data.order_id
+    symbol = tax_data.symbol
+    pnl = tax_data.pnl
+    quantity = tax_data.quantity
     
     get_trace_logger(trace_id)
     

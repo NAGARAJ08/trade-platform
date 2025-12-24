@@ -104,6 +104,12 @@ class RiskAssessmentResponse(BaseModel):
     timestamp: str
 
 
+class EscalationRequest(BaseModel):
+    order_id: str
+    risk_score: float
+    risk_factors: Dict[str, Any] = {}
+
+
 def get_trace_id(x_trace_id: Optional[str] = Header(None)) -> str:
     """Generate or use existing trace ID"""
     return x_trace_id or str(uuid.uuid4())
@@ -1114,18 +1120,17 @@ def list_risk_assessments(request: Request):
 
 
 @app.post("/risk/escalate")
-async def escalate_high_risk_order(request: Request):
+def escalate_high_risk_order(escalation_data: EscalationRequest, request: Request):
     """
     WORKFLOW 2: High-Risk Escalation Workflow
     Called ONLY when risk_score > 75
     Creates different call chain: escalate_to_risk_manager → check_portfolio_impact → require_manual_approval
     """
     trace_id = get_trace_id(request.headers.get("X-Trace-Id"))
-    data = await request.json()
     
-    order_id = data.get('order_id')
-    risk_score = data.get('risk_score')
-    risk_factors = data.get('risk_factors', {})
+    order_id = escalation_data.order_id
+    risk_score = escalation_data.risk_score
+    risk_factors = escalation_data.risk_factors
     
     get_trace_logger(trace_id)
     
