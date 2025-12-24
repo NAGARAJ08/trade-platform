@@ -390,6 +390,65 @@ def place_order(order: OrderRequest, request: Request):
         logger.info(f"[place_order] Risk Recommendation: {risk_result.get('recommendation')}", 
                    extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order'})
         
+        # Triggered ONLY when risk_score > 75
+        risk_score = risk_result.get('risk_score', 0)
+        if risk_score > 75:
+            logger.info(f"[place_order] ⚠️ HIGH RISK DETECTED (Score: {risk_score}) - Triggering escalation workflow",
+                       extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order'})
+            
+            # Call escalation functions (these are ONLY called for high-risk orders)
+            escalation_data = {
+                'order_id': order_id,
+                'risk_score': risk_score,
+                'risk_factors': risk_result.get('risk_factors', {})
+            }
+            
+            # This creates a DIFFERENT call chain: escalate_to_risk_manager → check_portfolio_impact
+            escalation_result = call_service(
+                f"{RISK_SERVICE_URL}/risk/escalate",
+                "POST",
+                trace_id,
+                escalation_data
+            )
+            
+            logger.info(f"[place_order] Escalation result: Auto-approved={escalation_result.get('auto_approved')}",
+                       extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order', 'extra_data': escalation_result})
+            
+            if not escalation_result.get('auto_approved'):
+                logger.warning(f"[place_order] Manual approval required - Order cannot be auto-processed",
+                             extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order'})
+                return OrderResponse(
+                    order_id=order_id,
+                    status="PENDING_APPROVAL",
+                    message="Order requires manual approval due to extremely high risk",
+                    trace_id=trace_id,
+                    details={'escalation': escalation_result, 'risk': risk_result}
+                )
+        
+        # Triggered ONLY when order_type=SELL AND estimated_pnl < 0
+        if order.order_type == OrderType.SELL and pricing_result.get('estimated_pnl', 0) < 0:
+            logger.info(f"[place_order] SELL AT LOSS detected (PnL: ${pricing_result.get('estimated_pnl')}) - Triggering tax validation workflow",
+                       extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order'})
+            
+            # Call loss-specific functions (these are ONLY called for loss-selling)
+            tax_data = {
+                'order_id': order_id,
+                'symbol': order.symbol,
+                'pnl': pricing_result.get('estimated_pnl'),
+                'quantity': actual_quantity
+            }
+            
+            # This creates a DIFFERENT call chain: calculate_tax_implications → check_wash_sale_rule → verify_cost_basis
+            tax_result = call_service(
+                f"{PRICING_PNL_SERVICE_URL}/pricing/tax-analysis",
+                "POST",
+                trace_id,
+                tax_data
+            )
+            
+            logger.info(f"[place_order] Tax analysis complete - Tax benefit: ${tax_result.get('tax_benefit')}",
+                       extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order', 'extra_data': tax_result})
+        
         # Check if risk is acceptable
         if risk_result.get("risk_level") == "HIGH" and risk_result.get("approved") is False:
             logger.warning("[place_order] ORDER REJECTED - High risk assessment failed approval", 
@@ -629,6 +688,351 @@ def get_order_status(order_id: str, request: Request):
         if e.status_code == 404:
             raise HTTPException(status_code=404, detail="Order not found")
         raise
+
+
+@app.post("/orders/institutional", response_model=OrderResponse)
+def place_institutional_order(order: OrderRequest, request: Request):
+    """
+    WORKFLOW 2: Institutional Order Flow
+    Place order for institutional clients (portfolio managers, hedge funds)
+    
+    Example payload:
+    {
+        "symbol": "AAPL",
+        "quantity": 5000,
+        "order_type": "BUY"
+    }
+    """
+    trace_id = get_trace_id(request.headers.get("X-Trace-Id"))
+    order_id = str(uuid.uuid4())
+    
+    overall_start = time_module.time()
+    get_trace_logger(trace_id)
+    
+    logger.info(f"[place_institutional_order] Institutional order placement initiated", 
+                extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_institutional_order'})
+    logger.info(f"[place_institutional_order] Params - symbol: {order.symbol}, quantity: {order.quantity}, order_type: {order.order_type}", 
+                extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_institutional_order'})
+    
+    trade_result = None
+    pricing_result = None
+    risk_result = None
+    
+    try:
+        # Step 1: Validate institutional order
+        logger.info("[place_institutional_order] STEP 1: Starting institutional order validation", 
+                   extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_institutional_order'})
+        
+        institutional_data = {
+            "order_id": order_id,
+            "symbol": order.symbol,
+            "quantity": order.quantity,
+            "order_type": order.order_type.value
+        }
+        
+        validation_start = time_module.time()
+        trade_result = call_service(
+            f"{TRADE_SERVICE_URL}/trades/validate-institutional",
+            "POST",
+            trace_id,
+            institutional_data
+        )
+        validation_duration_ms = int((time_module.time() - validation_start) * 1000)
+        
+        logger.info(f"[place_institutional_order] validate_institutional_order completed in {validation_duration_ms}ms", 
+                   extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_institutional_order', 
+                          'extra_data': {'duration_ms': validation_duration_ms}})        
+        if not trade_result.get("valid"):
+            logger.warning(f"[place_institutional_order] Institutional validation failed: {trade_result.get('reason')}", 
+                         extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_institutional_order'})
+            return OrderResponse(
+                order_id=order_id,
+                status="REJECTED",
+                message=trade_result.get("reason", "Institutional validation failed"),
+                trace_id=trace_id
+            )
+        
+        actual_quantity = trade_result.get("normalized_quantity", order.quantity)
+        
+        # Step 2: Calculate institutional pricing
+        logger.info("[place_institutional_order] STEP 2: Calculating institutional pricing", 
+                   extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_institutional_order'})
+        
+        pricing_data = {
+            "order_id": order_id,
+            "symbol": order.symbol,
+            "quantity": actual_quantity,
+            "order_type": order.order_type.value,
+            "client_type": "institutional"
+        }
+        
+        pricing_start = time_module.time()
+        pricing_result = call_service(
+            f"{PRICING_PNL_SERVICE_URL}/pricing/calculate-institutional",
+            "POST",
+            trace_id,
+            pricing_data
+        )
+        pricing_duration_ms = int((time_module.time() - pricing_start) * 1000)
+        
+        logger.info(f"[place_institutional_order] calculate_institutional_pricing completed in {pricing_duration_ms}ms", 
+                   extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_institutional_order', 
+                          'extra_data': {'duration_ms': pricing_duration_ms, 'price': pricing_result.get('price')}})
+        
+        # Step 3: Assess institutional risk
+        logger.info("[place_institutional_order] STEP 3: Assessing institutional risk", 
+                   extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_institutional_order'})
+        
+        risk_data = {
+            "order_id": order_id,
+            "symbol": order.symbol,
+            "quantity": actual_quantity,
+            "price": pricing_result.get("price"),
+            "pnl": pricing_result.get("estimated_pnl"),
+            "order_type": order.order_type.value,
+            "client_type": "institutional"
+        }
+        
+        risk_start = time_module.time()
+        risk_result = call_service(
+            f"{RISK_SERVICE_URL}/risk/assess-institutional",
+            "POST",
+            trace_id,
+            risk_data
+        )
+        risk_duration_ms = int((time_module.time() - risk_start) * 1000)
+        
+        logger.info(f"[place_institutional_order] assess_institutional_risk completed in {risk_duration_ms}ms", 
+                   extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_institutional_order', 
+                          'extra_data': {'duration_ms': risk_duration_ms, 'risk_score': risk_result.get('risk_score')}})
+        
+        if not risk_result.get("approved"):
+            logger.warning(f"[place_institutional_order] Risk assessment rejected", 
+                         extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_institutional_order'})
+            return OrderResponse(
+                order_id=order_id,
+                status="REJECTED",
+                message="Institutional order rejected due to risk assessment",
+                trace_id=trace_id,
+                details={'risk': risk_result}
+            )
+        
+        # Step 4: Execute institutional trade
+        logger.info("[place_institutional_order] STEP 4: Executing institutional trade", 
+                   extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_institutional_order'})
+        
+        execution_data = {
+            "order_id": order_id,
+            "symbol": order.symbol,
+            "quantity": actual_quantity,
+            "price": pricing_result.get("price"),
+            "order_type": order.order_type.value
+        }
+        
+        execution_result = call_service(
+            f"{TRADE_SERVICE_URL}/trades/execute",
+            "POST",
+            trace_id,
+            execution_data
+        )
+        
+        overall_duration_ms = int((time_module.time() - overall_start) * 1000)
+        
+        logger.info(f"[place_institutional_order] Institutional order completed successfully in {overall_duration_ms}ms", 
+                   extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_institutional_order', 
+                          'extra_data': {'total_duration_ms': overall_duration_ms}})
+        
+        return OrderResponse(
+            order_id=order_id,
+            status="EXECUTED",
+            message="Institutional order executed successfully",
+            trace_id=trace_id,
+            latency_ms=overall_duration_ms,
+            details={
+                'trade': trade_result,
+                'pricing': pricing_result,
+                'risk': risk_result,
+                'execution': execution_result
+            }
+        )
+        
+    except HTTPException as e:
+        logger.error(f"[place_institutional_order] Institutional order failed: {str(e.detail)}", 
+                    extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_institutional_order'})
+        raise e
+    except Exception as e:
+        logger.exception(f"[place_institutional_order] Unexpected error: {str(e)}", 
+                        extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_institutional_order'})
+        raise HTTPException(status_code=500, detail="Institutional order processing failed")
+
+
+@app.post("/orders/algo", response_model=OrderResponse)
+def place_algo_order(order: OrderRequest, request: Request):
+    """
+    WORKFLOW 3: Algorithmic Trading Order Flow
+    High-speed order placement for algorithmic trading systems
+    
+    Example payload:
+    {
+        "symbol": "AAPL",
+        "quantity": 1000,
+        "order_type": "BUY"
+    }
+    """
+    trace_id = get_trace_id(request.headers.get("X-Trace-Id"))
+    order_id = str(uuid.uuid4())
+    
+    overall_start = time_module.time()
+    get_trace_logger(trace_id)
+    
+    logger.info(f"[place_algo_order] Algo trading order initiated", 
+                extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_algo_order'})
+    logger.info(f"[place_algo_order] Params - symbol: {order.symbol}, quantity: {order.quantity}, order_type: {order.order_type}", 
+                extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_algo_order'})
+    
+    try:
+        # Step 1: Validate algo credentials and strategy limits
+        logger.info("[place_algo_order] STEP 1: Validating algo credentials", 
+                   extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_algo_order'})
+        
+        algo_data = {
+            "order_id": order_id,
+            "symbol": order.symbol,
+            "quantity": order.quantity,
+            "order_type": order.order_type.value,
+            "strategy_id": "MOMENTUM_v2"
+        }
+        
+        validation_start = time_module.time()
+        trade_result = call_service(
+            f"{TRADE_SERVICE_URL}/trades/validate-algo",
+            "POST",
+            trace_id,
+            algo_data
+        )
+        validation_duration_ms = int((time_module.time() - validation_start) * 1000)
+        
+        logger.info(f"[place_algo_order] validate_algo_order completed in {validation_duration_ms}ms", 
+                   extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_algo_order', 
+                          'extra_data': {'duration_ms': validation_duration_ms}})
+        
+        if not trade_result.get("valid"):
+            logger.warning(f"[place_algo_order] Algo validation failed: {trade_result.get('reason')}", 
+                         extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_algo_order'})
+            return OrderResponse(
+                order_id=order_id,
+                status="REJECTED",
+                message=trade_result.get("reason", "Algo validation failed"),
+                trace_id=trace_id
+            )
+        
+        # Step 2: Fast pricing calculation
+        logger.info("[place_algo_order] STEP 2: Fast algo pricing", 
+                   extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_algo_order'})
+        
+        pricing_data = {
+            "order_id": order_id,
+            "symbol": order.symbol,
+            "quantity": order.quantity,
+            "order_type": order.order_type.value
+        }
+        
+        pricing_start = time_module.time()
+        pricing_result = call_service(
+            f"{PRICING_PNL_SERVICE_URL}/pricing/algo-fast",
+            "POST",
+            trace_id,
+            pricing_data
+        )
+        pricing_duration_ms = int((time_module.time() - pricing_start) * 1000)
+        
+        logger.info(f"[place_algo_order] calculate_algo_pricing completed in {pricing_duration_ms}ms", 
+                   extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_algo_order', 
+                          'extra_data': {'duration_ms': pricing_duration_ms}})
+        
+        # Step 3: Pre-trade risk check (lightweight)
+        logger.info("[place_algo_order] STEP 3: Pre-trade risk check", 
+                   extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_algo_order'})
+        
+        risk_data = {
+            "order_id": order_id,
+            "symbol": order.symbol,
+            "quantity": order.quantity,
+            "price": pricing_result.get("price"),
+            "strategy_id": "MOMENTUM_v2"
+        }
+        
+        risk_start = time_module.time()
+        risk_result = call_service(
+            f"{RISK_SERVICE_URL}/risk/pre-trade-check",
+            "POST",
+            trace_id,
+            risk_data
+        )
+        risk_duration_ms = int((time_module.time() - risk_start) * 1000)
+        
+        logger.info(f"[place_algo_order] verify_pre_trade_risk completed in {risk_duration_ms}ms", 
+                   extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_algo_order', 
+                          'extra_data': {'duration_ms': risk_duration_ms}})
+        
+        if not risk_result.get("approved"):
+            logger.warning(f"[place_algo_order] Pre-trade risk check failed", 
+                         extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_algo_order'})
+            return OrderResponse(
+                order_id=order_id,
+                status="REJECTED",
+                message="Algo order rejected - circuit breaker triggered",
+                trace_id=trace_id,
+                details={'risk': risk_result}
+            )
+        
+        # Step 4: Route to execution engine
+        logger.info("[place_algo_order] STEP 4: Routing to execution engine", 
+                   extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_algo_order'})
+        
+        execution_data = {
+            "order_id": order_id,
+            "symbol": order.symbol,
+            "quantity": order.quantity,
+            "price": pricing_result.get("price"),
+            "order_type": order.order_type.value
+        }
+        
+        execution_result = call_service(
+            f"{TRADE_SERVICE_URL}/trades/execute",
+            "POST",
+            trace_id,
+            execution_data
+        )
+        
+        overall_duration_ms = int((time_module.time() - overall_start) * 1000)
+        
+        logger.info(f"[place_algo_order] Algo order completed in {overall_duration_ms}ms", 
+                   extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_algo_order', 
+                          'extra_data': {'total_duration_ms': overall_duration_ms}})
+        
+        return OrderResponse(
+            order_id=order_id,
+            status="EXECUTED",
+            message="Algo order executed successfully",
+            trace_id=trace_id,
+            latency_ms=overall_duration_ms,
+            details={
+                'trade': trade_result,
+                'pricing': pricing_result,
+                'risk': risk_result,
+                'execution': execution_result
+            }
+        )
+        
+    except HTTPException as e:
+        logger.error(f"[place_algo_order] Algo order failed: {str(e.detail)}", 
+                    extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_algo_order'})
+        raise e
+    except Exception as e:
+        logger.exception(f"[place_algo_order] Unexpected error: {str(e)}", 
+                        extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_algo_order'})
+        raise HTTPException(status_code=500, detail="Algo order processing failed")
 
 
 if __name__ == "__main__":

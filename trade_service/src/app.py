@@ -340,6 +340,42 @@ def normalize_quantity_to_lot_size(quantity: int, symbol: str, trace_id: str, or
     return quantity
 
 
+def express_order_check(quantity: int, price: float, symbol: str, trace_id: str, order_id: str) -> Dict[str, bool]:
+    """
+    Lightweight validation for express (fast-track) orders.
+    Called ONLY when order value < $10K (express order eligible).
+    Skips heavy validations like sector limits and portfolio concentration.
+    
+    Args:
+        quantity: Number of shares
+        price: Price per share
+        symbol: Stock ticker
+        trace_id: Trace ID for logging
+        order_id: Order ID for logging
+    
+    Returns:
+        dict: Express check results
+    """
+    logger.info(f"[express_order_check] Running express validation for small order",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'express_order_check'})
+    
+    order_value = quantity * price
+    
+    result = {
+        'express_eligible': order_value < 10000,
+        'order_value': order_value,
+        'skip_sector_check': True,
+        'skip_concentration_check': True,
+        'fast_track': True
+    }
+    
+    logger.info(f"[express_order_check] Express order approved - Fast-track enabled for ${order_value:.2f} order",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'express_order_check',
+                      'extra_data': result})
+    
+    return result
+
+
 def check_order_limits(quantity: int, symbol: str, trace_id: str, order_id: str) -> tuple[bool, Optional[str]]:
     """
     Validate order quantity against exchange and global limits.
@@ -629,6 +665,324 @@ def list_trades(request: Request):
     })
     
     return {"trades": list(trades_db.values()), "count": len(trades_db)}
+
+
+@app.post("/trades/validate-express")
+async def validate_express_order(request: Request):
+    """
+    WORKFLOW 4: Express Order Fast-Track Validation
+    Called for small orders (< $10K) to skip heavy validations
+    Creates lighter call chain: express_order_check → check_symbol_tradeable → validate_account_balance
+    Skips: check_sector_limits, portfolio_concentration, deep compliance
+    """
+    trace_id = get_trace_id(request.headers.get("X-Trace-Id"))
+    data = await request.json()
+    
+    order_id = data.get('order_id')
+    symbol = data.get('symbol')
+    quantity = data.get('quantity')
+    price = data.get('price', 0)
+    order_type = OrderType(data.get('order_type', 'BUY'))
+    
+    get_trace_logger(trace_id)
+    
+    logger.info(f"[validate_express_order] Params - order_id: {order_id}, symbol: {symbol}, quantity: {quantity}, price: {price}, order_type: {order_type.value}",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'validate_express_order'})
+    
+    order_value = quantity * price
+    logger.info(f"[validate_express_order] EXPRESS ORDER validation - Value: ${order_value:.2f}",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'validate_express_order'})
+    
+    # Step 1: Express eligibility check
+    express_check = express_order_check(quantity, price, symbol, trace_id, order_id)
+    
+    if not express_check['express_eligible']:
+        return {
+            'valid': False,
+            'reason': f"Order value ${order_value:.2f} exceeds express limit of $10,000",
+            'order_id': order_id,
+            'express_eligible': False
+        }
+    
+    # Step 2: Lightweight symbol check only
+    is_tradeable, error = check_symbol_tradeable(symbol, trace_id, order_id)
+    if not is_tradeable:
+        return {
+            'valid': False,
+            'reason': error,
+            'order_id': order_id,
+            'express_eligible': True
+        }
+    
+    # Step 3: Account balance check only (skip heavy validations)
+    is_valid, error = validate_account_balance(quantity, price, symbol, order_type, trace_id, order_id)
+    if not is_valid:
+        return {
+            'valid': False,
+            'reason': error,
+            'order_id': order_id,
+            'express_eligible': True
+        }
+    
+    logger.info(f"[validate_express_order] Express validation PASSED - Fast-track approved",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'validate_express_order'})
+    
+    return {
+        'valid': True,
+        'order_id': order_id,
+        'express_eligible': True,
+        'fast_track': True,
+        'validations_skipped': ['sector_limits', 'portfolio_concentration', 'deep_compliance'],
+        'timestamp': datetime.utcnow().isoformat()
+    }
+
+
+def check_portfolio_manager_approval(order_id: str, quantity: int, symbol: str, trace_id: str) -> bool:
+    """
+    Check if portfolio manager has approved large institutional orders.
+    UNIQUE to Institutional workflow.
+    """
+    logger.info(f"[check_portfolio_manager_approval] Params - order_id: {order_id}, symbol: {symbol}, quantity: {quantity}",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'check_portfolio_manager_approval'})
+    
+    # Simulate PM approval check (would query approval system)
+    import time
+    time.sleep(0.2)
+    
+    approved = quantity < 100000  # Auto-approve under 100K shares
+    
+    logger.info(f"[check_portfolio_manager_approval] PM approval: {approved}",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'check_portfolio_manager_approval'})
+    
+    return approved
+
+
+def institutional_compliance_check(symbol: str, quantity: int, trace_id: str, order_id: str) -> tuple[bool, Optional[str]]:
+    """
+    SEC Form 13F and institutional compliance validation.
+    UNIQUE to Institutional workflow.
+    """
+    logger.info(f"[institutional_compliance_check] Params - symbol: {symbol}, quantity: {quantity}",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'institutional_compliance_check'})
+    
+    # Check 13F reporting thresholds
+    import time
+    time.sleep(0.3)
+    
+    # Simulate compliance checks
+    logger.info(f"[institutional_compliance_check] SEC 13F compliance validated",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'institutional_compliance_check'})
+    
+    return True, None
+
+
+def verify_custodian_account(order_id: str, trace_id: str) -> bool:
+    """
+    Verify custodian account for institutional settlement.
+    UNIQUE to Institutional workflow.
+    """
+    logger.info(f"[verify_custodian_account] Params - order_id: {order_id}",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'verify_custodian_account'})
+    
+    # Simulate custodian verification
+    import time
+    time.sleep(0.1)
+    
+    logger.info(f"[verify_custodian_account] Custodian account verified",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'verify_custodian_account'})
+    
+    return True
+
+
+@app.post("/trades/validate-institutional")
+async def validate_institutional_order(request: Request):
+    """
+    WORKFLOW 2: Institutional Order Validation
+    Validates orders from institutional clients with higher limits and special compliance.
+    """
+    trace_id = get_trace_id(request.headers.get("X-Trace-Id"))
+    data = await request.json()
+    
+    order_id = data.get('order_id')
+    symbol = data.get('symbol')
+    quantity = data.get('quantity')
+    order_type = OrderType(data.get('order_type'))
+    
+    get_trace_logger(trace_id)
+    
+    logger.info(f"[validate_institutional_order] Params - order_id: {order_id}, symbol: {symbol}, quantity: {quantity}, order_type: {order_type.value}",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'validate_institutional_order'})
+    
+    # Step 1: Check symbol tradeable
+    is_tradeable, error = check_symbol_tradeable(symbol, trace_id, order_id)
+    if not is_tradeable:
+        return {'valid': False, 'reason': error, 'order_id': order_id}
+    
+    # Step 2: Institutional compliance check (UNIQUE)
+    is_compliant, error = institutional_compliance_check(symbol, quantity, trace_id, order_id)
+    if not is_compliant:
+        return {'valid': False, 'reason': error, 'order_id': order_id}
+    
+    # Step 3: Portfolio manager approval (UNIQUE)
+    pm_approved = check_portfolio_manager_approval(order_id, quantity, symbol, trace_id)
+    if not pm_approved:
+        return {
+            'valid': False,
+            'reason': 'Portfolio manager approval required for orders over 100K shares',
+            'order_id': order_id
+        }
+    
+    # Step 4: Verify custodian account (UNIQUE)
+    custodian_verified = verify_custodian_account(order_id, trace_id)
+    if not custodian_verified:
+        return {'valid': False, 'reason': 'Custodian account verification failed', 'order_id': order_id}
+    
+    # Step 5: Higher institutional limits (10M vs 500K retail)
+    metadata = get_symbol_metadata(symbol)
+    institutional_limit = 1000000  # 1M shares for institutional
+    if quantity > institutional_limit:
+        return {
+            'valid': False,
+            'reason': f'Quantity {quantity} exceeds institutional limit of {institutional_limit}',
+            'order_id': order_id
+        }
+    
+    logger.info(f"[validate_institutional_order] Institutional validation passed",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'validate_institutional_order'})
+    
+    return {
+        'valid': True,
+        'order_id': order_id,
+        'normalized_quantity': quantity,
+        'institutional_client': True,
+        'timestamp': datetime.utcnow().isoformat()
+    }
+
+
+def validate_algo_credentials(strategy_id: str, order_id: str, trace_id: str) -> bool:
+    """
+    Validate algorithmic trading strategy credentials.
+    UNIQUE to Algo workflow.
+    """
+    logger.info(f"[validate_algo_credentials] Params - strategy_id: {strategy_id}, order_id: {order_id}",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'validate_algo_credentials'})
+    
+    # Validate strategy is registered
+    valid_strategies = ['MOMENTUM_v2', 'MEAN_REVERSION', 'ARBITRAGE_v3']
+    is_valid = strategy_id in valid_strategies
+    
+    logger.info(f"[validate_algo_credentials] Strategy {strategy_id} validated: {is_valid}",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'validate_algo_credentials'})
+    
+    return is_valid
+
+
+def check_circuit_breaker_limits(symbol: str, quantity: int, strategy_id: str, trace_id: str, order_id: str) -> tuple[bool, Optional[str]]:
+    """
+    Check circuit breaker to prevent runaway algorithms.
+    UNIQUE to Algo workflow.
+    """
+    logger.info(f"[check_circuit_breaker_limits] Params - symbol: {symbol}, quantity: {quantity}, strategy_id: {strategy_id}",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'check_circuit_breaker_limits'})
+    
+    # Check per-strategy order limits
+    strategy_limits = {
+        'MOMENTUM_v2': 5000,
+        'MEAN_REVERSION': 10000,
+        'ARBITRAGE_v3': 3000
+    }
+    
+    limit = strategy_limits.get(strategy_id, 1000)
+    if quantity > limit:
+        error = f"Circuit breaker: Order quantity {quantity} exceeds strategy limit {limit}"
+        logger.warning(f"[check_circuit_breaker_limits] {error}",
+                      extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'check_circuit_breaker_limits'})
+        return False, error
+    
+    logger.info(f"[check_circuit_breaker_limits] Circuit breaker check passed",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'check_circuit_breaker_limits'})
+    
+    return True, None
+
+
+def verify_strategy_limits(strategy_id: str, trace_id: str, order_id: str) -> bool:
+    """
+    Verify daily strategy execution limits.
+    UNIQUE to Algo workflow.
+    """
+    logger.info(f"[verify_strategy_limits] Params - strategy_id: {strategy_id}",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'verify_strategy_limits'})
+    
+    # Simulate daily limit check
+    daily_count = 150  # Orders today
+    daily_limit = 500
+    
+    within_limits = daily_count < daily_limit
+    
+    logger.info(f"[verify_strategy_limits] Daily limits: {daily_count}/{daily_limit}",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'verify_strategy_limits'})
+    
+    return within_limits
+
+
+@app.post("/trades/validate-algo")
+async def validate_algo_order(request: Request):
+    """
+    WORKFLOW 3: Algorithmic Trading Validation
+    Fast validation for algo trading with circuit breakers and strategy limits.
+    """
+    trace_id = get_trace_id(request.headers.get("X-Trace-Id"))
+    data = await request.json()
+    
+    order_id = data.get('order_id')
+    symbol = data.get('symbol')
+    quantity = data.get('quantity')
+    order_type = OrderType(data.get('order_type'))
+    strategy_id = data.get('strategy_id', 'UNKNOWN')
+    
+    get_trace_logger(trace_id)
+    
+    logger.info(f"[validate_algo_order] Params - order_id: {order_id}, symbol: {symbol}, quantity: {quantity}, strategy_id: {strategy_id}",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'validate_algo_order'})
+    
+    # Step 1: Validate algo credentials (UNIQUE)
+    credentials_valid = validate_algo_credentials(strategy_id, order_id, trace_id)
+    if not credentials_valid:
+        return {
+            'valid': False,
+            'reason': f'Invalid or unregistered strategy: {strategy_id}',
+            'order_id': order_id
+        }
+    
+    # Step 2: Check circuit breaker limits (UNIQUE)
+    circuit_ok, error = check_circuit_breaker_limits(symbol, quantity, strategy_id, trace_id, order_id)
+    if not circuit_ok:
+        return {'valid': False, 'reason': error, 'order_id': order_id}
+    
+    # Step 3: Verify strategy limits (UNIQUE)
+    limits_ok = verify_strategy_limits(strategy_id, trace_id, order_id)
+    if not limits_ok:
+        return {
+            'valid': False,
+            'reason': 'Daily strategy execution limit exceeded',
+            'order_id': order_id
+        }
+    
+    # Step 4: Symbol tradeable (lightweight check)
+    is_tradeable, error = check_symbol_tradeable(symbol, trace_id, order_id)
+    if not is_tradeable:
+        return {'valid': False, 'reason': error, 'order_id': order_id}
+    
+    logger.info(f"[validate_algo_order] Algo validation passed",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'validate_algo_order'})
+    
+    return {
+        'valid': True,
+        'order_id': order_id,
+        'strategy_id': strategy_id,
+        'algo_trading': True,
+        'timestamp': datetime.utcnow().isoformat()
+    }
 
 
 if __name__ == "__main__":

@@ -519,6 +519,122 @@ def calculate_total_cost(quantity: int, price: float, symbol: str, order_type: O
         return {'base_amount': gross_proceeds, 'commission': commission, 'fees': sec_fee, 'total_cost': net_proceeds}
 
 
+def calculate_tax_implications(symbol: str, pnl: float, quantity: int, trace_id: str, order_id: str) -> Dict[str, Any]:
+    """
+    Calculate tax implications for SELL orders with losses.
+    Called ONLY when order_type = SELL AND pnl < 0.
+    
+    Args:
+        symbol: Stock ticker
+        pnl: Estimated profit/loss (negative for loss)
+        quantity: Number of shares
+        trace_id: Trace ID for logging
+        order_id: Order ID for logging
+    
+    Returns:
+        dict: Tax calculation details
+    """
+    logger.info(f"[calculate_tax_implications] Params - symbol: {symbol}, pnl: ${pnl:.2f}, quantity: {quantity}, capital_loss: ${abs(pnl):.2f}",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'calculate_tax_implications'})
+    logger.info(f"[calculate_tax_implications] Calculating tax implications for loss sale",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'calculate_tax_implications'})
+    
+    # Calculate potential tax loss deduction
+    capital_loss = abs(pnl)
+    tax_bracket = 0.24  # Assume 24% tax bracket
+    tax_benefit = capital_loss * tax_bracket
+    
+    tax_calc = {
+        'capital_loss': capital_loss,
+        'tax_bracket': tax_bracket,
+        'estimated_tax_benefit': round(tax_benefit, 2),
+        'loss_type': 'SHORT_TERM' if quantity > 100 else 'LONG_TERM',  # Simplified
+        'deduction_limit': 3000  # IRS annual limit
+    }
+    
+    logger.info(f"[calculate_tax_implications] Tax benefit: ${tax_benefit:.2f} from ${capital_loss:.2f} loss",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'calculate_tax_implications',
+                      'extra_data': tax_calc})
+    
+    return tax_calc
+
+
+def check_wash_sale_rule(symbol: str, quantity: int, trace_id: str, order_id: str) -> Dict[str, bool]:
+    """
+    Check for potential wash sale violations (selling at loss then rebuying within 30 days).
+    Called ONLY for SELL orders with losses.
+    
+    Args:
+        symbol: Stock ticker
+        quantity: Number of shares
+        trace_id: Trace ID for logging
+        order_id: Order ID for logging
+    
+    Returns:
+        dict: Wash sale check results
+    """
+    logger.info(f"[check_wash_sale_rule] Params - symbol: {symbol}, quantity: {quantity}, lookback_days: 30",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'check_wash_sale_rule'})
+    logger.info(f"[check_wash_sale_rule] Checking wash sale rules for {symbol}",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'check_wash_sale_rule'})
+    
+    # Simulate recent transaction check (would query trade history in production)
+    import time
+    time.sleep(0.2)
+    
+    # Simulate: no recent buys of same symbol (safe)
+    result = {
+        'wash_sale_risk': False,
+        'recent_buys_within_30_days': 0,
+        'warning': None
+    }
+    
+    logger.info(f"[check_wash_sale_rule] No wash sale violations detected",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'check_wash_sale_rule',
+                      'extra_data': result})
+    
+    return result
+
+
+def verify_cost_basis_accuracy(symbol: str, quantity: int, trace_id: str, order_id: str) -> Dict[str, Any]:
+    """
+    Verify cost basis accuracy for accurate loss calculation.
+    Called ONLY for SELL orders with losses to ensure tax reporting accuracy.
+    
+    Args:
+        symbol: Stock ticker
+        quantity: Number of shares
+        trace_id: Trace ID for logging
+        order_id: Order ID for logging
+    
+    Returns:
+        dict: Cost basis verification details
+    """
+    logger.info(f"[verify_cost_basis_accuracy] Params - symbol: {symbol}, quantity: {quantity}",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'verify_cost_basis_accuracy'})
+    logger.info(f"[verify_cost_basis_accuracy] Verifying cost basis for {symbol}",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'verify_cost_basis_accuracy'})
+    
+    cost_basis = get_cost_basis(symbol)
+    
+    # Simulate cost basis verification against purchase records
+    import time
+    time.sleep(0.2)
+    
+    verification = {
+        'verified_cost_basis': cost_basis,
+        'purchase_lot_method': 'FIFO',  # First In, First Out
+        'lots_affected': 2,
+        'accuracy_confirmed': True
+    }
+    
+    logger.info(f"[verify_cost_basis_accuracy] Cost basis verified: ${cost_basis}/share using FIFO",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'verify_cost_basis_accuracy',
+                      'extra_data': verification})
+    
+    return verification
+
+
 def calculate_estimated_pnl(symbol: str, quantity: int, price: float, order_type: OrderType, trace_id: str, order_id: str) -> float:
     """
     Calculate estimated profit/loss for the order.
@@ -781,6 +897,202 @@ def get_pnl(order_id: str, request: Request):
         "total_cost": pricing.get("total_cost"),
         "symbol": pricing.get("symbol")
     }
+
+
+@app.post("/pricing/tax-analysis")
+async def analyze_tax_implications(request: Request):
+    """
+    WORKFLOW 3: SELL at Loss Tax Analysis Workflow
+    Called ONLY when order_type=SELL AND pnl < 0
+    Creates different call chain: calculate_tax_implications → check_wash_sale_rule → verify_cost_basis_accuracy
+    """
+    trace_id = get_trace_id(request.headers.get("X-Trace-Id"))
+    data = await request.json()
+    
+    order_id = data.get('order_id')
+    symbol = data.get('symbol')
+    pnl = data.get('pnl')
+    quantity = data.get('quantity')
+    
+    get_trace_logger(trace_id)
+    
+    logger.info(f"[analyze_tax_implications] Params - order_id: {order_id}, symbol: {symbol}, pnl: ${pnl:.2f}, quantity: {quantity}",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'analyze_tax_implications'})
+    logger.info(f"[analyze_tax_implications] TAX ANALYSIS for SELL at LOSS - PnL: ${pnl}",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'analyze_tax_implications'})
+    
+    # Step 1: Calculate tax implications
+    tax_calc = calculate_tax_implications(symbol, pnl, quantity, trace_id, order_id)
+    
+    # Step 2: Check wash sale rule
+    wash_sale_check = check_wash_sale_rule(symbol, quantity, trace_id, order_id)
+    
+    # Step 3: Verify cost basis accuracy
+    cost_basis_verification = verify_cost_basis_accuracy(symbol, quantity, trace_id, order_id)
+    
+    result = {
+        'order_id': order_id,
+        'symbol': symbol,
+        'pnl': pnl,
+        'tax_calculation': tax_calc,
+        'wash_sale_check': wash_sale_check,
+        'cost_basis_verification': cost_basis_verification,
+        'tax_benefit': tax_calc['estimated_tax_benefit'],
+        'timestamp': datetime.utcnow().isoformat()
+    }
+    
+    logger.info(f"[analyze_tax_implications] Tax analysis complete - Tax benefit: ${tax_calc['estimated_tax_benefit']}",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'analyze_tax_implications',
+                      'extra_data': result})
+    
+    return result
+
+
+def apply_volume_discount(quantity: int, base_price: float, trace_id: str, order_id: str) -> float:
+    """
+    Apply institutional volume discount for large orders.
+    UNIQUE to Institutional workflow.
+    """
+    logger.info(f"[apply_volume_discount] Params - quantity: {quantity}, base_price: ${base_price:.2f}",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'apply_volume_discount'})
+    
+    # Volume-based discount tiers
+    if quantity >= 10000:
+        discount = 0.005  # 0.5% discount
+    elif quantity >= 5000:
+        discount = 0.003  # 0.3% discount
+    elif quantity >= 1000:
+        discount = 0.001  # 0.1% discount
+    else:
+        discount = 0.0
+    
+    discounted_price = base_price * (1 - discount)
+    
+    logger.info(f"[apply_volume_discount] Volume discount applied: {discount*100:.2f}%, Price: ${base_price:.2f} -> ${discounted_price:.2f}",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'apply_volume_discount'})
+    
+    return round(discounted_price, 2)
+
+
+@app.post("/pricing/calculate-institutional")
+async def calculate_institutional_pricing(request: Request):
+    """
+    WORKFLOW 2: Institutional Pricing Calculation
+    Applies volume discounts and institutional commission rates.
+    """
+    trace_id = get_trace_id(request.headers.get("X-Trace-Id"))
+    data = await request.json()
+    
+    order_id = data.get('order_id')
+    symbol = data.get('symbol')
+    quantity = data.get('quantity')
+    order_type = OrderType(data.get('order_type'))
+    
+    get_trace_logger(trace_id)
+    
+    logger.info(f"[calculate_institutional_pricing] Params - order_id: {order_id}, symbol: {symbol}, quantity: {quantity}, order_type: {order_type.value}",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'calculate_institutional_pricing'})
+    
+    # Step 1: Get base market price
+    base_price = get_market_price(symbol, order_type, trace_id, order_id)
+    
+    # Step 2: Apply volume discount (UNIQUE to institutional)
+    institutional_price = apply_volume_discount(quantity, base_price, trace_id, order_id)
+    
+    # Step 3: Calculate costs with lower institutional commission (0.1% vs 0.5%)
+    base_amount = quantity * institutional_price
+    commission = base_amount * 0.001  # 0.1% for institutional
+    
+    if order_type == OrderType.BUY:
+        fees = quantity * 0.01  # Lower regulatory fees
+        total_cost = base_amount + commission + fees
+    else:
+        fees = quantity * 0.01
+        total_cost = base_amount - commission - fees
+    
+    # Step 4: Calculate P&L
+    estimated_pnl = calculate_estimated_pnl(symbol, quantity, institutional_price, order_type, trace_id, order_id)
+    
+    result = {
+        'order_id': order_id,
+        'symbol': symbol,
+        'price': institutional_price,
+        'base_price': base_price,
+        'volume_discount': base_price - institutional_price,
+        'estimated_pnl': estimated_pnl,
+        'total_cost': round(total_cost, 2),
+        'commission': round(commission, 2),
+        'fees': round(fees, 2),
+        'base_amount': round(base_amount, 2),
+        'institutional_client': True,
+        'timestamp': datetime.utcnow().isoformat()
+    }
+    
+    logger.info(f"[calculate_institutional_pricing] Institutional pricing complete - Price: ${institutional_price}, Total: ${total_cost:.2f}",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'calculate_institutional_pricing'})
+    
+    return result
+
+
+@app.post("/pricing/algo-fast")
+async def calculate_algo_pricing(request: Request):
+    """
+    WORKFLOW 3: Fast Algo Pricing
+    Lightweight pricing for high-frequency algo trading.
+    """
+    trace_id = get_trace_id(request.headers.get("X-Trace-Id"))
+    data = await request.json()
+    
+    order_id = data.get('order_id')
+    symbol = data.get('symbol')
+    quantity = data.get('quantity')
+    order_type = OrderType(data.get('order_type'))
+    
+    get_trace_logger(trace_id)
+    
+    logger.info(f"[calculate_algo_pricing] Params - order_id: {order_id}, symbol: {symbol}, quantity: {quantity}",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'calculate_algo_pricing'})
+    
+    # Fast pricing - skip validation chain for speed
+    base_prices = {
+        "AAPL": 175.50,
+        "GOOGL": 140.25,
+        "MSFT": 378.90,
+        "AMZN": 152.75,
+        "TSLA": 242.80,
+        "META": 356.20,
+        "NVDA": 495.60
+    }
+    
+    price = base_prices.get(symbol, 100.0)
+    
+    # Minimal cost calculation
+    base_amount = quantity * price
+    commission = base_amount * 0.0001  # 0.01% for algo trading
+    fees = quantity * 0.005  # Minimal fees
+    
+    if order_type == OrderType.BUY:
+        total_cost = base_amount + commission + fees
+    else:
+        total_cost = base_amount - commission - fees
+    
+    result = {
+        'order_id': order_id,
+        'symbol': symbol,
+        'price': price,
+        'estimated_pnl': 0.0,  # Skip PnL for speed
+        'total_cost': round(total_cost, 2),
+        'commission': round(commission, 2),
+        'fees': round(fees, 2),
+        'base_amount': round(base_amount, 2),
+        'algo_trading': True,
+        'timestamp': datetime.utcnow().isoformat()
+    }
+    
+    logger.info(f"[calculate_algo_pricing] Fast algo pricing complete - Price: ${price}",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'calculate_algo_pricing'})
+    
+    return result
 
 
 if __name__ == "__main__":

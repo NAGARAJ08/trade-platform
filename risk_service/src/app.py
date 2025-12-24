@@ -682,6 +682,114 @@ def determine_risk_level(risk_score: float) -> RiskLevel:
         return RiskLevel.LOW
 
 
+def escalate_to_risk_manager(order_id: str, risk_score: float, risk_factors: Dict[str, Any], trace_id: str) -> Dict[str, Any]:
+    """
+    Escalate high-risk order to risk manager for manual review.
+    Called ONLY when risk_score > 75.
+    
+    Args:
+        order_id: Order identifier
+        risk_score: Calculated risk score
+        risk_factors: Detailed risk breakdown
+        trace_id: Trace ID for logging
+    
+    Returns:
+        dict: Escalation details with manager approval status
+    """
+    logger.info(f"[escalate_to_risk_manager] Params - order_id: {order_id}, risk_score: {risk_score}, threshold: 75",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'escalate_to_risk_manager'})
+    logger.info(f"[escalate_to_risk_manager] HIGH RISK ALERT - Escalating order to risk manager",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'escalate_to_risk_manager'})
+    
+    # Simulate risk manager review (in production, would send notification)
+    import time
+    time.sleep(0.5)  # Simulate review delay
+    
+    # Auto-approve if score is 75-85, require manual approval if > 85
+    auto_approved = risk_score < 85
+    
+    result = {
+        'escalated': True,
+        'reviewed_by': 'RiskManager_AI' if auto_approved else 'RiskManager_Human_Required',
+        'auto_approved': auto_approved,
+        'escalation_reason': f'Risk score {risk_score} exceeds threshold of 75',
+        'review_timestamp': datetime.utcnow().isoformat()
+    }
+    
+    logger.info(f"[escalate_to_risk_manager] Escalation complete - Auto-approved: {auto_approved}",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'escalate_to_risk_manager',
+                      'extra_data': result})
+    
+    return result
+
+
+def check_portfolio_impact(symbol: str, quantity: int, price: float, trace_id: str, order_id: str) -> Dict[str, Any]:
+    """
+    Deep portfolio impact analysis for high-risk orders.
+    Called ONLY when risk escalation is triggered.
+    
+    Args:
+        symbol: Stock ticker
+        quantity: Number of shares
+        price: Price per share
+        trace_id: Trace ID for logging
+        order_id: Order ID for logging
+    
+    Returns:
+        dict: Portfolio impact metrics
+    """
+    logger.info(f"[check_portfolio_impact] Params - symbol: {symbol}, quantity: {quantity}, price: {price}, position_value: ${quantity * price:.2f}",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'check_portfolio_impact'})
+    logger.info(f"[check_portfolio_impact] Analyzing portfolio impact for high-risk order",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'check_portfolio_impact'})
+    
+    position_value = quantity * price
+    
+    # Simulate portfolio database query (would be real in production)
+    import time
+    time.sleep(0.3)
+    
+    impact = {
+        'current_portfolio_value': 1000000,
+        'position_value': position_value,
+        'impact_pct': (position_value / 1000000) * 100,
+        'estimated_volatility_increase': 'HIGH' if position_value > 100000 else 'MODERATE',
+        'correlation_risk': 'Increases tech sector exposure by 5%'
+    }
+    
+    logger.info(f"[check_portfolio_impact] Portfolio impact: {impact['impact_pct']:.2f}% of portfolio",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'check_portfolio_impact',
+                      'extra_data': impact})
+    
+    return impact
+
+
+def require_manual_approval(order_id: str, reason: str, trace_id: str) -> bool:
+    """
+    Flag order for manual approval by trading desk.
+    Called ONLY when auto-approval fails (risk_score > 85).
+    
+    Args:
+        order_id: Order identifier
+        reason: Reason for manual approval requirement
+        trace_id: Trace ID for logging
+    
+    Returns:
+        bool: Always False (requires manual approval, cannot auto-process)
+    """
+    logger.info(f"[require_manual_approval] Params - order_id: {order_id}, reason: {reason}, threshold_exceeded: 85",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'require_manual_approval'})
+    logger.warning(f"[require_manual_approval] MANUAL APPROVAL REQUIRED - {reason}",
+                  extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'require_manual_approval'})
+    
+    # In production, would create approval ticket in trading desk system
+    logger.info(f"[require_manual_approval] Approval ticket created for trading desk",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'require_manual_approval',
+                      'extra_data': {'ticket_id': f'RISK-{order_id[:8]}', 'reason': reason}})
+    
+    return False
+
+
 def get_recommendation(risk_level: RiskLevel, risk_score: float) -> str:
     """
     Generate human-readable risk recommendation.
@@ -1003,6 +1111,293 @@ def list_risk_assessments(request: Request):
         "assessments": list(risk_assessments.values()),
         "count": len(risk_assessments)
     }
+
+
+@app.post("/risk/escalate")
+async def escalate_high_risk_order(request: Request):
+    """
+    WORKFLOW 2: High-Risk Escalation Workflow
+    Called ONLY when risk_score > 75
+    Creates different call chain: escalate_to_risk_manager → check_portfolio_impact → require_manual_approval
+    """
+    trace_id = get_trace_id(request.headers.get("X-Trace-Id"))
+    data = await request.json()
+    
+    order_id = data.get('order_id')
+    risk_score = data.get('risk_score')
+    risk_factors = data.get('risk_factors', {})
+    
+    get_trace_logger(trace_id)
+    
+    logger.info(f"[escalate_high_risk_order] Params - order_id: {order_id}, risk_score: {risk_score}",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'escalate_high_risk_order'})
+    logger.info(f"[escalate_high_risk_order] HIGH RISK ORDER ESCALATION - Score: {risk_score}",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'escalate_high_risk_order'})
+    
+    # Step 1: Escalate to risk manager
+    escalation_result = escalate_to_risk_manager(order_id, risk_score, risk_factors, trace_id)
+    
+    # Step 2: Check portfolio impact (deep analysis)
+    symbol = risk_factors.get('symbol', 'UNKNOWN')
+    quantity = risk_factors.get('quantity', 0)
+    price = risk_factors.get('price', 0)
+    
+    portfolio_impact = check_portfolio_impact(symbol, quantity, price, trace_id, order_id)
+    
+    # Step 3: If not auto-approved, require manual approval
+    if not escalation_result['auto_approved']:
+        manual_approval_required = require_manual_approval(
+            order_id,
+            f"Risk score {risk_score} exceeds auto-approval threshold of 85",
+            trace_id
+        )
+    else:
+        manual_approval_required = False
+    
+    result = {
+        'order_id': order_id,
+        'escalation': escalation_result,
+        'portfolio_impact': portfolio_impact,
+        'auto_approved': escalation_result['auto_approved'],
+        'manual_approval_required': manual_approval_required,
+        'timestamp': datetime.utcnow().isoformat()
+    }
+    
+    logger.info(f"[escalate_high_risk_order] Escalation complete - Auto-approved: {escalation_result['auto_approved']}",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'escalate_high_risk_order',
+                      'extra_data': result})
+    
+    return result
+
+
+def check_aggregate_exposure(symbol: str, quantity: int, trace_id: str, order_id: str) -> Dict[str, Any]:
+    """
+    Check aggregate exposure across multiple portfolios.
+    UNIQUE to Institutional workflow - validates cross-portfolio concentration risk.
+    """
+    logger.info(f"[check_aggregate_exposure] Params - symbol: {symbol}, quantity: {quantity}",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'check_aggregate_exposure'})
+    
+    time.sleep(0.15)  # Simulate cross-portfolio lookup
+    
+    # Simulated aggregate positions
+    aggregate_positions = {
+        "AAPL": 50000,
+        "GOOGL": 30000,
+        "MSFT": 45000,
+        "AMZN": 25000,
+        "TSLA": 15000
+    }
+    
+    current_exposure = aggregate_positions.get(symbol, 0)
+    new_exposure = current_exposure + quantity
+    
+    # Institutional limits: max 100K shares per symbol across all portfolios
+    within_limits = new_exposure <= 100000
+    
+    result = {
+        'within_limits': within_limits,
+        'current_exposure': current_exposure,
+        'new_exposure': new_exposure,
+        'limit': 100000,
+        'symbol': symbol
+    }
+    
+    logger.info(f"[check_aggregate_exposure] Aggregate check complete - Exposure: {current_exposure} -> {new_exposure}, Within limits: {within_limits}",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'check_aggregate_exposure'})
+    
+    return result
+
+
+def assess_regulatory_risk(symbol: str, quantity: int, price: float, trace_id: str, order_id: str) -> Dict[str, Any]:
+    """
+    Assess regulatory compliance risk for institutional orders.
+    UNIQUE to Institutional workflow - SEC/FINRA compliance checks.
+    """
+    logger.info(f"[assess_regulatory_risk] Params - symbol: {symbol}, quantity: {quantity}, price: ${price:.2f}",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'assess_regulatory_risk'})
+    
+    time.sleep(0.2)  # Simulate regulatory database query
+    
+    total_value = quantity * price
+    
+    # Regulatory thresholds
+    requires_13f = total_value > 500000  # Form 13F for positions > $500K
+    requires_13d = quantity > 50000  # Beneficial ownership > 5%
+    
+    compliance_issues = []
+    
+    if requires_13f:
+        compliance_issues.append("Form 13F filing required")
+    
+    if requires_13d:
+        compliance_issues.append("Form 13D beneficial ownership disclosure required")
+    
+    is_compliant = len(compliance_issues) == 0
+    
+    result = {
+        'is_compliant': is_compliant,
+        'requires_13f': requires_13f,
+        'requires_13d': requires_13d,
+        'compliance_issues': compliance_issues,
+        'total_value': total_value
+    }
+    
+    logger.info(f"[assess_regulatory_risk] Regulatory assessment complete - Compliant: {is_compliant}",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'assess_regulatory_risk'})
+    
+    return result
+
+
+@app.post("/risk/assess-institutional")
+async def assess_institutional_risk(request: Request):
+    """
+    WORKFLOW 2: Institutional Risk Assessment
+    Comprehensive risk analysis with regulatory compliance and aggregate exposure checks.
+    """
+    trace_id = get_trace_id(request.headers.get("X-Trace-Id"))
+    data = await request.json()
+    
+    order_id = data.get('order_id')
+    symbol = data.get('symbol')
+    quantity = data.get('quantity')
+    price = data.get('price')
+    estimated_pnl = data.get('estimated_pnl', 0.0)
+    order_type = OrderType(data.get('order_type'))
+    
+    get_trace_logger(trace_id)
+    
+    logger.info(f"[assess_institutional_risk] Params - order_id: {order_id}, symbol: {symbol}, quantity: {quantity}, price: ${price}",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'assess_institutional_risk'})
+    
+    # Step 1: Calculate base risk score
+    risk_score, risk_factors = calculate_risk_score(symbol, quantity, price, estimated_pnl, order_type)
+    
+    # Step 2: Check aggregate exposure (UNIQUE to institutional)
+    aggregate_check = check_aggregate_exposure(symbol, quantity, trace_id, order_id)
+    
+    # Step 3: Assess regulatory risk (UNIQUE to institutional)
+    regulatory_check = assess_regulatory_risk(symbol, quantity, price, trace_id, order_id)
+    
+    # Determine approval
+    approved = (risk_score <= 70 and 
+                aggregate_check['within_limits'] and 
+                regulatory_check['is_compliant'])
+    
+    result = {
+        'order_id': order_id,
+        'approved': approved,
+        'risk_score': risk_score,
+        'aggregate_exposure': aggregate_check,
+        'regulatory_compliance': regulatory_check,
+        'risk_factors': risk_factors,
+        'institutional_client': True,
+        'timestamp': datetime.utcnow().isoformat()
+    }
+    
+    logger.info(f"[assess_institutional_risk] Institutional risk assessment complete - Approved: {approved}, Risk: {risk_score}",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'assess_institutional_risk'})
+    
+    return result
+
+
+def verify_pre_trade_risk(symbol: str, quantity: int, strategy_id: str, trace_id: str, order_id: str) -> Dict[str, Any]:
+    """
+    Fast pre-trade risk check for algo trading.
+    UNIQUE to Algorithmic workflow - lightweight validation.
+    """
+    logger.info(f"[verify_pre_trade_risk] Params - symbol: {symbol}, quantity: {quantity}, strategy_id: {strategy_id}",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'verify_pre_trade_risk'})
+    
+    time.sleep(0.01)  # Very fast check - 10ms
+    
+    # Quick risk scoring for algos
+    quick_score = (quantity / 1000) * 5  # Simple quantity-based risk
+    
+    passes = quick_score <= 50
+    
+    result = {
+        'passes': passes,
+        'quick_risk_score': quick_score,
+        'strategy_id': strategy_id
+    }
+    
+    logger.info(f"[verify_pre_trade_risk] Pre-trade check complete - Passes: {passes}, Score: {quick_score}",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'verify_pre_trade_risk'})
+    
+    return result
+
+
+def check_strategy_correlation(strategy_id: str, symbol: str, trace_id: str, order_id: str) -> Dict[str, Any]:
+    """
+    Check correlation risk between concurrent algo strategies.
+    UNIQUE to Algorithmic workflow - prevents correlated strategy overload.
+    """
+    logger.info(f"[check_strategy_correlation] Params - strategy_id: {strategy_id}, symbol: {symbol}",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'check_strategy_correlation'})
+    
+    time.sleep(0.02)  # Fast correlation check
+    
+    # Simulated active strategies
+    active_strategies = ["MOMENTUM_v2", "ARBITRAGE_v3"]
+    
+    # Only flag as high correlation if MULTIPLE strategies are targeting the SAME symbol simultaneously
+    # For demo: only reject if it's TSLA (most volatile) with active strategies
+    high_correlation = strategy_id in active_strategies and symbol == "TSLA" and len(active_strategies) > 1
+    
+    result = {
+        'high_correlation': high_correlation,
+        'active_strategies': len(active_strategies),
+        'warning': "Multiple correlated strategies active on volatile symbol" if high_correlation else None
+    }
+    
+    logger.info(f"[check_strategy_correlation] Correlation check complete - High correlation: {high_correlation}",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'check_strategy_correlation'})
+    
+    return result
+
+
+@app.post("/risk/pre-trade-check")
+async def pre_trade_check(request: Request):
+    """
+    WORKFLOW 3: Fast Pre-Trade Check for Algo Trading
+    Lightweight risk validation optimized for speed.
+    """
+    trace_id = get_trace_id(request.headers.get("X-Trace-Id"))
+    data = await request.json()
+    
+    order_id = data.get('order_id')
+    symbol = data.get('symbol')
+    quantity = data.get('quantity')
+    strategy_id = data.get('strategy_id', 'MOMENTUM_v2')
+    
+    get_trace_logger(trace_id)
+    
+    logger.info(f"[pre_trade_check] Params - order_id: {order_id}, strategy_id: {strategy_id}, symbol: {symbol}",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'pre_trade_check'})
+    
+    # Fast risk validation
+    pre_trade_result = verify_pre_trade_risk(symbol, quantity, strategy_id, trace_id, order_id)
+    
+    # Strategy correlation check
+    correlation_check = check_strategy_correlation(strategy_id, symbol, trace_id, order_id)
+    
+    approved = pre_trade_result['passes'] and not correlation_check['high_correlation']
+    
+    result = {
+        'order_id': order_id,
+        'approved': approved,
+        'quick_risk_score': pre_trade_result['quick_risk_score'],
+        'correlation_warning': correlation_check['warning'],
+        'algo_trading': True,
+        'strategy_id': strategy_id,
+        'timestamp': datetime.utcnow().isoformat()
+    }
+    
+    logger.info(f"[pre_trade_check] Pre-trade check complete - Approved: {approved}",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'pre_trade_check'})
+    
+    return result
 
 
 if __name__ == "__main__":
