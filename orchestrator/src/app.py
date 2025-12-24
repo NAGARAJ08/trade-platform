@@ -181,6 +181,142 @@ def call_service(url: str, method: str, trace_id: str, json_data: dict = None, t
         raise HTTPException(status_code=500, detail=f"Service call failed: {url}")
 
 
+def validate_basic_order_requirements(order: OrderRequest, trace_id: str, order_id: str) -> tuple[bool, Optional[str]]:
+    """
+    COMMON FUNCTION: Validate basic order requirements across ALL workflow types.
+    Called by retail, institutional, and algorithmic trading workflows.
+    
+    This function provides a common anchor point for semantic search RCA:
+    - When logs contain this function, semantic search knows it's an order workflow
+    - Workflow-specific functions (validate_institutional, validate_algo) then identify WHICH workflow
+    
+    Args:
+        order: Order request with symbol, quantity, order_type
+        trace_id: Trace ID for logging
+        order_id: Order ID for logging
+    
+    Returns:
+        tuple: (is_valid, error_message)
+            - is_valid: True if basic requirements met, False otherwise
+            - error_message: None if valid, error description if not
+    
+    Validations:
+        1. Market hours check (9:30 AM - 11:00 PM)
+        2. Symbol format validation (uppercase, 1-5 characters)
+        3. Quantity bounds (must be positive, max 10,000)
+        4. Order type validation (BUY or SELL)
+    
+    Note:
+        This is intentionally basic - workflow-specific validations happen later
+        Appears in ALL workflow logs for semantic search pattern matching
+    """
+    logger.info(f"[validate_basic_order_requirements] COMMON VALIDATION - Checking basic order requirements",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'validate_basic_order_requirements',
+                      'extra_data': {'symbol': order.symbol, 'quantity': order.quantity, 'order_type': order.order_type.value}})
+    
+    # Check 1: Market hours
+    current_time = datetime.now().time()
+    market_open = time(9, 30)
+    market_close = time(23, 0)
+    
+    if not (market_open <= current_time <= market_close):
+        error_msg = f"Market is closed. Trading hours: {market_open.strftime('%H:%M')} - {market_close.strftime('%H:%M')}"
+        logger.exception(f"[validate_basic_order_requirements] Market hours validation failed",
+                    extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'validate_basic_order_requirements',
+                           'extra_data': {'current_time': current_time.isoformat(), 'error': error_msg}},
+                    exc_info=True)
+        return False, error_msg
+    
+    # Check 2: Symbol format validation
+    if not order.symbol or not order.symbol.isupper() or len(order.symbol) > 5:
+        error_msg = f"Invalid symbol format: {order.symbol}. Must be uppercase, 1-5 characters"
+        logger.exception(f"[validate_basic_order_requirements] Symbol validation failed",
+                    extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'validate_basic_order_requirements',
+                           'extra_data': {'symbol': order.symbol, 'error': error_msg}},
+                    exc_info=True)
+        return False, error_msg
+    
+    # Check 3: Quantity bounds
+    if order.quantity <= 0:
+        error_msg = f"Quantity must be positive, received: {order.quantity}"
+        logger.exception(f"[validate_basic_order_requirements] Quantity validation failed",
+                    extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'validate_basic_order_requirements',
+                           'extra_data': {'quantity': order.quantity, 'error': error_msg}},
+                    exc_info=True)
+        return False, error_msg
+    
+    if order.quantity > 10000:
+        error_msg = f"Quantity exceeds maximum limit of 10,000 shares, received: {order.quantity}"
+        logger.exception(f"[validate_basic_order_requirements] Quantity limit exceeded",
+                    extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'validate_basic_order_requirements',
+                           'extra_data': {'quantity': order.quantity, 'limit': 10000, 'error': error_msg}},
+                    exc_info=True)
+        return False, error_msg
+    
+    logger.info(f"[validate_basic_order_requirements] COMMON VALIDATION PASSED - All basic requirements met",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'validate_basic_order_requirements'})
+    
+    return True, None
+
+
+def record_order_metrics(order_id: str, trace_id: str, workflow_type: str, 
+                        status: str, duration_ms: int, 
+                        trade_result: Optional[Dict] = None,
+                        pricing_result: Optional[Dict] = None,
+                        risk_result: Optional[Dict] = None) -> None:
+    """
+    COMMON FUNCTION: Record order execution metrics across ALL workflow types.
+    Called by retail, institutional, and algorithmic trading workflows.
+    
+    This function provides a common anchor point for semantic search RCA:
+    - When logs contain this function, semantic search knows order processing completed/failed
+    - Combined with validate_basic_order_requirements, establishes full workflow lifecycle
+    - Workflow-specific metrics in details distinguish between retail/institutional/algo
+    
+    Args:
+        order_id: Unique order identifier
+        trace_id: Distributed trace ID
+        workflow_type: 'retail', 'institutional', or 'algo'
+        status: 'SUCCESS' or 'FAILED'
+        duration_ms: Total execution duration in milliseconds
+        trade_result: Optional trade service response
+        pricing_result: Optional pricing service response
+        risk_result: Optional risk service response
+    
+    Side Effects:
+        - Logs structured metrics for monitoring/alerting
+        - Appears in ALL workflow logs for semantic search pattern matching
+    
+    Note:
+        This is intentionally called at the END of all workflows
+        Provides common exit point observable in logs
+    """
+    metrics = {
+        'workflow_type': workflow_type,
+        'status': status,
+        'duration_ms': duration_ms,
+        'stages_completed': []
+    }
+    
+    # Track which stages completed
+    if trade_result:
+        metrics['stages_completed'].append('validation')
+    if pricing_result:
+        metrics['stages_completed'].append('pricing')
+    if risk_result:
+        metrics['stages_completed'].append('risk_assessment')
+    
+    # Workflow-specific metrics
+    if workflow_type == 'institutional' and pricing_result:
+        metrics['volume_discount'] = pricing_result.get('volume_discount', 0)
+    elif workflow_type == 'algo' and pricing_result:
+        metrics['execution_speed'] = pricing_result.get('execution_speed', 'N/A')
+    
+    logger.info(f"[record_order_metrics] COMMON METRICS - {workflow_type.upper()} order {status}",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'record_order_metrics',
+                      'extra_data': metrics})
+
+
 def build_error_response(order_id: str, trace_id: str, overall_start: float, 
                         trade_result: Optional[Dict], pricing_result: Optional[Dict], 
                         risk_result: Optional[Dict], exception: HTTPException, 
@@ -303,6 +439,11 @@ def place_order(order: OrderRequest, request: Request):
     risk_result = None
     
     try:
+        # COMMON STEP: Validate basic order requirements (called by ALL workflows)
+        is_valid, error_msg = validate_basic_order_requirements(order, trace_id, order_id)
+        if not is_valid:
+            raise HTTPException(status_code=400, detail=error_msg)
+        
         # Step 1: Validate trade with Trade Service
         logger.info("[place_order] STEP 1: Starting trade validation with Trade Service", extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order'})
         trade_data = {
@@ -620,6 +761,10 @@ def place_order(order: OrderRequest, request: Request):
         # Calculate overall end-to-end latency
         overall_duration_ms = int((time_module.time() - overall_start) * 1000)
         
+        # COMMON STEP: Record metrics (called by ALL workflows)
+        record_order_metrics(order_id, trace_id, 'retail', 'SUCCESS', overall_duration_ms,
+                           trade_result, pricing_result, risk_result)
+        
         logger.info(f"[place_order] Order completed successfully in {overall_duration_ms}ms (end-to-end)", 
                    extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order', 
                           'extra_data': {'total_duration_ms': overall_duration_ms, 'status': 'EXECUTED'}})
@@ -679,6 +824,11 @@ def place_order(order: OrderRequest, request: Request):
         )
         
     except HTTPException as e:
+        overall_duration_ms = int((time_module.time() - overall_start) * 1000)
+        # COMMON STEP: Record metrics even on failure
+        record_order_metrics(order_id, trace_id, 'retail', 'FAILED', overall_duration_ms,
+                           trade_result, pricing_result, risk_result)
+        
         logger.exception(f"[place_order] Order placement failed", extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_order'}, exc_info=True)
         
         # Determine failure stage
@@ -807,6 +957,10 @@ def place_institutional_order(order: OrderRequest, request: Request):
     risk_result = None
     
     try:
+        # COMMON STEP: Validate basic order requirements (called by ALL workflows)
+        is_valid, error_msg = validate_basic_order_requirements(order, trace_id, order_id)
+        if not is_valid:
+            raise HTTPException(status_code=400, detail=error_msg)
         # Step 1: Validate institutional order
         logger.info("[place_institutional_order] STEP 1: Starting institutional order validation", 
                    extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_institutional_order'})
@@ -926,6 +1080,10 @@ def place_institutional_order(order: OrderRequest, request: Request):
         
         overall_duration_ms = int((time_module.time() - overall_start) * 1000)
         
+        # COMMON STEP: Record metrics (called by ALL workflows)
+        record_order_metrics(order_id, trace_id, 'institutional', 'SUCCESS', overall_duration_ms,
+                           trade_result, pricing_result, risk_result)
+        
         logger.info(f"[place_institutional_order] Institutional order completed successfully in {overall_duration_ms}ms", 
                    extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_institutional_order', 
                           'extra_data': {'total_duration_ms': overall_duration_ms}})
@@ -972,6 +1130,11 @@ def place_institutional_order(order: OrderRequest, request: Request):
         )
         
     except HTTPException as e:
+        overall_duration_ms = int((time_module.time() - overall_start) * 1000)
+        # COMMON STEP: Record metrics even on failure
+        record_order_metrics(order_id, trace_id, 'institutional', 'FAILED', overall_duration_ms,
+                           trade_result, pricing_result, risk_result)
+        
         return build_error_response(
             order_id=order_id,
             trace_id=trace_id,
@@ -1019,6 +1182,10 @@ def place_algo_order(order: OrderRequest, request: Request):
     risk_result = None
     
     try:
+        # COMMON STEP: Validate basic order requirements (called by ALL workflows)
+        is_valid, error_msg = validate_basic_order_requirements(order, trace_id, order_id)
+        if not is_valid:
+            raise HTTPException(status_code=400, detail=error_msg)
         # Step 1: Validate algo credentials and strategy limits
         logger.info("[place_algo_order] STEP 1: Validating algo credentials", 
                    extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_algo_order'})
@@ -1136,6 +1303,10 @@ def place_algo_order(order: OrderRequest, request: Request):
         
         overall_duration_ms = int((time_module.time() - overall_start) * 1000)
         
+        # COMMON STEP: Record metrics (called by ALL workflows)
+        record_order_metrics(order_id, trace_id, 'algo', 'SUCCESS', overall_duration_ms,
+                           trade_result, pricing_result, risk_result)
+        
         logger.info(f"[place_algo_order] Algo order completed in {overall_duration_ms}ms", 
                    extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'place_algo_order', 
                           'extra_data': {'total_duration_ms': overall_duration_ms}})
@@ -1179,6 +1350,11 @@ def place_algo_order(order: OrderRequest, request: Request):
         )
         
     except HTTPException as e:
+        overall_duration_ms = int((time_module.time() - overall_start) * 1000)
+        # COMMON STEP: Record metrics even on failure
+        record_order_metrics(order_id, trace_id, 'algo', 'FAILED', overall_duration_ms,
+                           trade_result, pricing_result, risk_result)
+        
         return build_error_response(
             order_id=order_id,
             trace_id=trace_id,

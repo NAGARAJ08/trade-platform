@@ -2,6 +2,7 @@ import logging
 import json
 import uuid
 import time
+import random
 from datetime import datetime
 from typing import Optional, Dict, Any
 from enum import Enum
@@ -475,6 +476,62 @@ def normalize_risk_score(raw_score: float) -> float:
     return round(normalized, 3)
 
 
+def check_order_velocity(symbol: str, order_id: str, trace_id: str) -> tuple[bool, Optional[str]]:
+    """
+    COMMON FUNCTION: Check order velocity limits across ALL workflows.
+    Called during risk assessment by retail, institutional, and algorithmic workflows.
+    
+    This function provides a common anchor point in the MIDDLE of execution:
+    - Semantic search finds this in risk logs across all three workflows
+    - Prevents rapid-fire order submission (potential abuse/error)
+    - Applied uniformly to all order types for compliance
+    
+    Args:
+        symbol: Stock ticker symbol
+        order_id: Order ID for logging
+        trace_id: Trace ID for logging
+    
+    Returns:
+        tuple: (is_compliant, error_message)
+            - is_compliant: True if velocity is within limits
+            - error_message: None if compliant, description if violated
+    
+    Velocity Checks:
+        - Maximum 10 orders per symbol per minute
+        - Prevents algorithmic errors and market abuse
+        - Regulatory requirement for order throttling
+    
+    Note:
+        This is intentionally COMMON business logic called during risk assessment
+        Appears in ALL workflow logs for semantic search pattern matching
+    """
+    logger.info(f"[check_order_velocity] COMMON VELOCITY CHECK - Checking order rate for {symbol}",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'check_order_velocity',
+                      'extra_data': {'symbol': symbol}})
+    
+    # In real system, would query order history database for last 60 seconds
+    # Simulated: Check if this symbol has had too many orders recently
+    
+    # Simulated recent order count (in production, query time-series database)
+    recent_order_count = random.randint(0, 12)  # Random for simulation
+    max_orders_per_minute = 10
+    
+    if recent_order_count > max_orders_per_minute:
+        error_msg = f"Order velocity limit exceeded for {symbol}: {recent_order_count} orders in last minute (max: {max_orders_per_minute})"
+        logger.exception(f"[check_order_velocity] Velocity check FAILED - Too many orders",
+                    extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'check_order_velocity',
+                           'extra_data': {'symbol': symbol, 'recent_orders': recent_order_count, 
+                                        'limit': max_orders_per_minute}},
+                    exc_info=True)
+        return False, error_msg
+    
+    logger.info(f"[check_order_velocity] VELOCITY CHECK PASSED - {recent_order_count}/{max_orders_per_minute} orders in last minute",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'check_order_velocity',
+                      'extra_data': {'symbol': symbol, 'recent_orders': recent_order_count, 'limit': max_orders_per_minute}})
+    
+    return True, None
+
+
 def calculate_risk_score(
     symbol: str,
     quantity: int,
@@ -854,6 +911,11 @@ def assess_risk(request_data: RiskAssessmentRequest, request: Request):
     })
     
     try:
+        # COMMON STEP: Check order velocity (called by ALL workflows during risk assessment)
+        velocity_ok, velocity_error = check_order_velocity(request_data.symbol, request_data.order_id, trace_id)
+        if not velocity_ok:
+            raise HTTPException(status_code=429, detail=velocity_error)
+        
         # Step 1: Validate compliance rules
         logger.info("[assess_risk] Step 1: Validating compliance rules", 
                    extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'function': 'assess_risk'})
@@ -1274,6 +1336,11 @@ def assess_institutional_risk(request_data: RiskAssessmentRequest, request: Requ
     logger.info(f"[assess_institutional_risk] Params - order_id: {order_id}, symbol: {symbol}, quantity: {quantity}, price: ${price}",
                extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'assess_institutional_risk'})
     
+    # COMMON STEP: Check order velocity (called by ALL workflows during risk assessment)
+    velocity_ok, velocity_error = check_order_velocity(symbol, order_id, trace_id)
+    if not velocity_ok:
+        raise HTTPException(status_code=429, detail=velocity_error)
+    
     # Step 1: Calculate base risk score
     risk_score, risk_factors = calculate_risk_score(symbol, quantity, price, estimated_pnl, order_type)
     
@@ -1377,6 +1444,11 @@ def pre_trade_check(request_data: RiskAssessmentRequest, request: Request, strat
     
     logger.info(f"[pre_trade_check] Params - order_id: {order_id}, strategy_id: {strategy_id}, symbol: {symbol}",
                extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'pre_trade_check'})
+    
+    # COMMON STEP: Check order velocity (called by ALL workflows during risk assessment)
+    velocity_ok, velocity_error = check_order_velocity(symbol, order_id, trace_id)
+    if not velocity_ok:
+        raise HTTPException(status_code=429, detail=velocity_error)
     
     # Fast risk validation
     pre_trade_result = verify_pre_trade_risk(symbol, quantity, strategy_id, trace_id, order_id)

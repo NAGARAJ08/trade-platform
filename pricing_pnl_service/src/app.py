@@ -328,6 +328,75 @@ def get_cost_basis(symbol: str) -> float:
     return cost_basis.get(symbol, 50.0)
 
 
+def verify_symbol_liquidity(symbol: str, quantity: int, trace_id: str, order_id: str) -> tuple[bool, Optional[str]]:
+    """
+    COMMON FUNCTION: Verify market liquidity for symbol across ALL workflows.
+    Called during pricing phase by retail, institutional, and algorithmic workflows.
+    
+    This function provides a common anchor point in the MIDDLE of execution:
+    - Semantic search finds this in pricing logs across all three workflows
+    - Validates symbol has sufficient market depth for order size
+    - Prevents execution of orders that could cause market impact
+    
+    Args:
+        symbol: Stock ticker symbol
+        quantity: Number of shares to trade
+        trace_id: Trace ID for logging
+        order_id: Order ID for logging
+    
+    Returns:
+        tuple: (is_liquid, error_message)
+            - is_liquid: True if sufficient liquidity exists
+            - error_message: None if liquid, description if not
+    
+    Liquidity Checks:
+        - Average daily volume must be > 10x order quantity
+        - Prevents market manipulation and excessive slippage
+        - Applied uniformly to all order types
+    
+    Note:
+        This is intentionally COMMON business logic called during pricing
+        Appears in ALL workflow logs for semantic search pattern matching
+    """
+    logger.info(f"[verify_symbol_liquidity] COMMON LIQUIDITY CHECK - Verifying {symbol} can handle {quantity} shares",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'verify_symbol_liquidity',
+                      'extra_data': {'symbol': symbol, 'quantity': quantity}})
+    
+    # Simulated average daily volume data (in real system, would query market data service)
+    avg_daily_volumes = {
+        "AAPL": 50000000,   # 50M shares/day
+        "GOOGL": 25000000,  # 25M shares/day
+        "MSFT": 30000000,   # 30M shares/day
+        "AMZN": 40000000,   # 40M shares/day
+        "TSLA": 100000000,  # 100M shares/day (high volatility = high volume)
+        "META": 15000000,   # 15M shares/day
+        "NVDA": 35000000    # 35M shares/day
+    }
+    
+    avg_volume = avg_daily_volumes.get(symbol, 1000000)  # Default 1M for unknown symbols
+    
+    # Liquidity rule: Order quantity should not exceed 10% of average daily volume
+    # This prevents market impact and ensures order can be filled at reasonable prices
+    max_allowed = avg_volume * 0.10
+    
+    if quantity > max_allowed:
+        error_msg = f"Insufficient liquidity for {symbol}: Order quantity {quantity} exceeds 10% of avg daily volume ({int(max_allowed)} shares)"
+        logger.exception(f"[verify_symbol_liquidity] Liquidity check FAILED",
+                    extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'verify_symbol_liquidity',
+                           'extra_data': {'symbol': symbol, 'quantity': quantity, 
+                                        'avg_daily_volume': avg_volume, 'max_allowed': int(max_allowed),
+                                        'percentage': round(quantity / avg_volume * 100, 2)}},
+                    exc_info=True)
+        return False, error_msg
+    
+    liquidity_percentage = round(quantity / avg_volume * 100, 3)
+    logger.info(f"[verify_symbol_liquidity] LIQUIDITY CHECK PASSED - Order is {liquidity_percentage}% of daily volume",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'verify_symbol_liquidity',
+                      'extra_data': {'symbol': symbol, 'liquidity_pct': liquidity_percentage}})
+    
+    return True, None
+
+
 def audit_commission_rate(commission: float, base_amount: float, trace_id: str, order_id: str) -> bool:
     """
     Level 3: Audit commission rate to ensure it matches expected percentage.
@@ -729,6 +798,11 @@ def calculate_pricing(request_data: PricingRequest, request: Request):
                    extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'function': 'calculate_pricing'})
         current_price = get_market_price(request_data.symbol, request_data.order_type, trace_id, request_data.order_id)
         
+        # COMMON STEP: Verify symbol liquidity (called by ALL workflows during pricing)
+        is_liquid, liquidity_error = verify_symbol_liquidity(request_data.symbol, request_data.quantity, trace_id, request_data.order_id)
+        if not is_liquid:
+            raise HTTPException(status_code=400, detail=liquidity_error)
+        
         logger.info(f"[get_market_price] Market price retrieved: ${current_price}", extra={
             "trace_id": trace_id,
             "order_id": request_data.order_id,
@@ -1001,6 +1075,11 @@ def calculate_institutional_pricing(request_data: PricingRequest, request: Reque
     # Step 1: Get base market price
     base_price = get_market_price(symbol, order_type, trace_id, order_id)
     
+    # COMMON STEP: Verify symbol liquidity (called by ALL workflows during pricing)
+    is_liquid, liquidity_error = verify_symbol_liquidity(symbol, quantity, trace_id, order_id)
+    if not is_liquid:
+        raise HTTPException(status_code=400, detail=liquidity_error)
+    
     # Step 2: Apply volume discount (UNIQUE to institutional)
     institutional_price = apply_volume_discount(quantity, base_price, trace_id, order_id)
     
@@ -1056,6 +1135,11 @@ def calculate_algo_pricing(request_data: PricingRequest, request: Request):
     
     logger.info(f"[calculate_algo_pricing] Params - order_id: {order_id}, symbol: {symbol}, quantity: {quantity}",
                extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'calculate_algo_pricing'})
+    
+    # COMMON STEP: Verify symbol liquidity (called by ALL workflows during pricing)
+    is_liquid, liquidity_error = verify_symbol_liquidity(symbol, quantity, trace_id, order_id)
+    if not is_liquid:
+        raise HTTPException(status_code=400, detail=liquidity_error)
     
     # Fast pricing - skip validation chain for speed
     base_prices = {
