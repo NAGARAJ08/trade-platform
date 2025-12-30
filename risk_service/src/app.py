@@ -564,6 +564,13 @@ def calculate_risk_score(
     """
     risk_factors = {}
     
+    # Step 0: Capture input parameters for complete data lineage
+    risk_factors["symbol"] = symbol
+    risk_factors["quantity"] = quantity
+    risk_factors["price"] = round(price, 3)
+    risk_factors["pnl"] = round(pnl, 3)
+    risk_factors["order_type"] = order_type.value
+    
     # Step 1: Calculate position value
     position_value = quantity * price
     risk_factors["position_value"] = round(position_value, 3)
@@ -592,6 +599,7 @@ def calculate_risk_score(
     
     risk_factors["volatility_multiplier"] = volatility_multiplier
     risk_factors["volatility_explanation"] = volatility_explanation
+    risk_factors["volatility_risk"] = volatility_multiplier  # Alias for logging compatibility
     risk_factors["risk_after_volatility"] = round(risk_after_volatility, 3)
     
     # Step 4: Apply sector risk adjustment
@@ -1075,12 +1083,14 @@ def assess_risk(request_data: RiskAssessmentRequest, request: Request):
             request_data.order_type
         )
         
-        logger.info(f"[calculate_risk_score] Risk factors breakdown:", extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'function': 'calculate_risk_score', 'extra_data': risk_factors})
-        logger.info(f"[calculate_risk_score]   - Position size risk: {risk_factors.get('position_size_risk')} points (Position value: ${risk_factors.get('position_value'):.2f})", extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'function': 'calculate_risk_score'})
-        logger.info(f"[calculate_risk_score]   - PnL risk: {risk_factors.get('pnl_risk')} points (Estimated PnL: ${risk_factors.get('estimated_pnl'):.2f})", extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'function': 'calculate_risk_score'})
-        logger.info(f"[calculate_risk_score]   - Quantity risk: {risk_factors.get('quantity_risk')} points (Quantity: {risk_factors.get('quantity')})", extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'function': 'calculate_risk_score'})
-        logger.info(f"[calculate_risk_score]   - Volatility risk: {risk_factors.get('volatility_risk')} points (Symbol: {risk_factors.get('symbol')})", extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'function': 'calculate_risk_score'})
-        logger.info(f"[calculate_risk_score] Total risk score calculated: {risk_score:.1f}/100", extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'function': 'calculate_risk_score', 'extra_data': {'risk_score': risk_score}})
+        logger.info(f"[calculate_risk_score] Risk calculation breakdown", extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'function': 'calculate_risk_score', 'extra_data': risk_factors})
+        logger.info(f"[calculate_risk_score] Position size risk: {risk_factors.get('position_size_risk')} points, Position value: ${risk_factors.get('position_value'):.2f}, {risk_factors.get('position_risk_logic')}", extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'function': 'calculate_risk_score'})
+        logger.info(f"[calculate_risk_score] PnL risk: {risk_factors.get('pnl_risk')} points, Estimated PnL: ${risk_factors.get('estimated_pnl'):.2f}, {risk_factors.get('pnl_risk_logic')}", extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'function': 'calculate_risk_score'})
+        logger.info(f"[calculate_risk_score] Quantity risk: {risk_factors.get('quantity_risk')} points, Quantity: {risk_factors.get('quantity')}, {risk_factors.get('quantity_risk_logic')}", extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'function': 'calculate_risk_score'})
+        logger.info(f"[calculate_risk_score] Volatility multiplier: {risk_factors.get('volatility_multiplier')}x for {risk_factors.get('symbol')}, {risk_factors.get('volatility_explanation')}", extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'function': 'calculate_risk_score'})
+        logger.info(f"[calculate_risk_score] Sector risk adjustment: {risk_factors.get('sector_risk_adjustment')}", extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'function': 'calculate_risk_score'})
+        logger.info(f"[calculate_risk_score] Calculation path: {risk_factors.get('calculation_summary')}", extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'function': 'calculate_risk_score'})
+        logger.info(f"[calculate_risk_score] Final risk score: {risk_score:.3f}/100", extra={'trace_id': trace_id, 'order_id': request_data.order_id, 'function': 'calculate_risk_score', 'extra_data': {'risk_score': risk_score}})
         
         # Determine risk level
         risk_level = determine_risk_level(risk_score)
@@ -1342,12 +1352,27 @@ def assess_institutional_risk(request_data: RiskAssessmentRequest, request: Requ
         raise HTTPException(status_code=429, detail=velocity_error)
     
     # Step 1: Calculate base risk score
+    logger.info(f"[assess_institutional_risk] Calculating institutional risk score",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'assess_institutional_risk'})
     risk_score, risk_factors = calculate_risk_score(symbol, quantity, price, estimated_pnl, order_type)
     
+    logger.info(f"[assess_institutional_risk] Risk factors calculated", extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'assess_institutional_risk', 'extra_data': risk_factors})
+    logger.info(f"[assess_institutional_risk] Position size risk: {risk_factors.get('position_size_risk')}, {risk_factors.get('position_risk_logic')}", extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'assess_institutional_risk'})
+    logger.info(f"[assess_institutional_risk] PnL risk: {risk_factors.get('pnl_risk')}, PnL: ${risk_factors.get('estimated_pnl'):.2f}, {risk_factors.get('pnl_risk_logic')}", extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'assess_institutional_risk'})
+    logger.info(f"[assess_institutional_risk] Quantity risk: {risk_factors.get('quantity_risk')}, Qty: {risk_factors.get('quantity')}, {risk_factors.get('quantity_risk_logic')}", extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'assess_institutional_risk'})
+    logger.info(f"[assess_institutional_risk] Volatility multiplier: {risk_factors.get('volatility_multiplier')}x, {risk_factors.get('volatility_explanation')}", extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'assess_institutional_risk'})
+    logger.info(f"[assess_institutional_risk] Sector adjustment: {risk_factors.get('sector_risk_adjustment')}", extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'assess_institutional_risk'})
+    logger.info(f"[assess_institutional_risk] Calculation path: {risk_factors.get('calculation_summary')}", extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'assess_institutional_risk'})
+    logger.info(f"[assess_institutional_risk] Risk score calculated: {risk_score:.3f}/100", extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'assess_institutional_risk'})
+    
     # Step 2: Check aggregate exposure (UNIQUE to institutional)
+    logger.info(f"[assess_institutional_risk] Checking aggregate exposure across portfolios",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'assess_institutional_risk'})
     aggregate_check = check_aggregate_exposure(symbol, quantity, trace_id, order_id)
     
     # Step 3: Assess regulatory risk (UNIQUE to institutional)
+    logger.info(f"[assess_institutional_risk] Assessing regulatory compliance",
+               extra={'trace_id': trace_id, 'order_id': order_id, 'function': 'assess_institutional_risk'})
     regulatory_check = assess_regulatory_risk(symbol, quantity, price, trace_id, order_id)
     
     # Determine approval
